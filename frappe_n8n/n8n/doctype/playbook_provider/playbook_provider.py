@@ -154,12 +154,12 @@ class N8nPlaybookProvider(PlaybookProviderBase):
                 
         if not webhook_id:
             frappe.log_error(f"Cannot trigger execution for Playbook {playbook_doc.name}: No webhook node found.", "n8n Integration Error")
-            return
+            frappe.throw(f"Cannot trigger execution for Playbook {playbook_doc.name}: No webhook node found.")
             
         settings = frappe.get_single("n8n Settings")
         if not settings.enabled or not settings.base_url:
             frappe.log_error(f"Cannot trigger execution for Playbook {playbook_doc.name}: n8n is not enabled or base_url is missing.", "n8n Integration Error")
-            return
+            frappe.throw(f"Cannot trigger execution for Playbook {playbook_doc.name}: n8n is not enabled or base_url is missing.")
             
         webhook_url = f"{settings.base_url.rstrip('/')}/webhook/{webhook_id}"
         
