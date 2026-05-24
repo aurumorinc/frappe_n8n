@@ -14,6 +14,8 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.n8nSettings.ensure_webhook_credential")
     def setUp(self, mock_ensure, mock_get):
         super().setUp()
+        
+
         if not frappe.db.exists("Playbook Provider", "n8n"):
             provider = frappe.get_doc({
                 "doctype": "Playbook Provider",
