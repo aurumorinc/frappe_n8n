@@ -21,7 +21,8 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
 
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.requests.post")
-    def test_stop_execution(self, mock_post, mock_get):
+    @patch("frappe_playbook.playbook.doctype.playbook_provider.playbook_provider.PlaybookProvider.sync_playbooks_status")
+    def test_stop_execution(self, mock_sync, mock_post, mock_get):
         mock_get.return_value.status_code = 200
         settings = frappe.get_single("n8n Settings")
         settings.enabled = 1
@@ -70,5 +71,5 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution",
             url=callback_url,
-            payload=response_body
+            payload={"status": "approved"}
         )
