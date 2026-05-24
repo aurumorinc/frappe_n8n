@@ -178,7 +178,7 @@ class N8nPlaybookProvider(PlaybookProviderBase):
                 payload = {"data": payload}
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
-        enqueue("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution", url=callback_url, payload=payload)
+        enqueue("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution", url=callback_url, payload=payload, execution_id=execution_doc.name)
         
     def get_execution_status(self, execution_id):
         import requests
