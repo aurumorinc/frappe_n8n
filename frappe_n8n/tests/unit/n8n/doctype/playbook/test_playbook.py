@@ -68,7 +68,8 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         execution_doc = frappe._dict({"name": "EXEC-001"})
         payload = {"data": "test"}
 
-        provider.queue_trigger_execution(playbook_doc, execution_doc, payload)
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            provider.queue_trigger_execution(playbook_doc, execution_doc, payload)
 
         mock_enqueue.assert_not_called()
         mock_log_error.assert_called_once()
