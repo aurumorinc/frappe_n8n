@@ -11,7 +11,13 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
         
         trigger_execution("http://example.com", {"data": "test"})
         
-        mock_post.assert_called_once_with("http://example.com", json={"data": "test"}, timeout=10)
+        self.assertEqual(mock_post.call_count, 1)
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "http://example.com")
+        self.assertEqual(kwargs["headers"]["content-type"], "application/cloudevents+json")
+        self.assertEqual(kwargs["timeout"], 10)
+        self.assertIn(b'"data": {"data": "test"}', kwargs["data"])
+        self.assertIn(b'"type": "playbook.execution.triggered"', kwargs["data"])
         
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe.log_error")
@@ -29,7 +35,13 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
         
         resume_execution("http://example.com", '{"status": "approved"}')
         
-        mock_post.assert_called_once_with("http://example.com", json='{"status": "approved"}', timeout=10)
+        self.assertEqual(mock_post.call_count, 1)
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "http://example.com")
+        self.assertEqual(kwargs["headers"]["content-type"], "application/cloudevents+json")
+        self.assertEqual(kwargs["timeout"], 10)
+        self.assertIn(b'"data": "{\\\"status\\\": \\\"approved\\\"}"', kwargs["data"])
+        self.assertIn(b'"type": "playbook.execution.resumed"', kwargs["data"])
         
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe.log_error")
