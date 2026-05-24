@@ -7,6 +7,8 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     def setUp(self, mock_get):
         super().setUp()
+        
+
         mock_get.return_value.status_code = 200
         self.settings = frappe.get_single("n8n Settings")
         self.settings.enabled = 1
@@ -23,7 +25,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "doctype": "Playbook",
             "playbook_name": "Test Playbook Create",
             "provider": "n8n",
-            "document_type": "ToDo"
+            "document_type": "ToDo", "status": "Enabled"
         }).insert()
         
         mock_post.return_value.status_code = 200
@@ -135,7 +137,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "doctype": "Playbook",
             "playbook_name": "Test Playbook Queue",
             "provider": "n8n",
-            "document_type": "ToDo"
+            "document_type": "ToDo", "status": "Enabled"
         }).insert()
         
         queue_update_playbooks()
@@ -157,7 +159,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "doctype": "Playbook",
             "playbook_name": "Test Playbook Update",
             "provider": "n8n",
-            "document_type": "ToDo"
+            "document_type": "ToDo", "status": "Enabled"
         }).insert()
         
         # Mock the result of retrieve_workflow
@@ -219,7 +221,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "doctype": "Playbook",
             "playbook_name": "Test Playbook No Data",
             "provider": "n8n",
-            "document_type": "ToDo"
+            "document_type": "ToDo", "status": "Enabled"
         }).insert()
         
         mock_result = mock_enqueue.return_value
@@ -266,7 +268,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "doctype": "Playbook",
             "playbook_name": "Test Playbook Existing Nodes",
             "provider": "n8n",
-            "document_type": "ToDo",
+            "document_type": "ToDo", "status": "Enabled",
             "nodes": [
                 {
                     "node_name": "Old Node",
