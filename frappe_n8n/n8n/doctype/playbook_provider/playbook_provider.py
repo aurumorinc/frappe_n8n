@@ -296,4 +296,4 @@ def update_a_playbook(playbook_name):
             "n8n_webhook_id": node.get("webhookId", "")
         })
         
-    playbook_doc.save()
+    playbook_doc.save(ignore_permissions=True)
