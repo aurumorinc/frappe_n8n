@@ -4,10 +4,21 @@ from unittest.mock import patch
 from frappe_n8n.n8n.doctype.playbook_provider.playbook_provider import N8nPlaybookProvider
 
 class TestN8nPlaybookProvider(IntegrationTestCase):
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
-    def test_queue_trigger_execution(self, mock_enqueue):
+    def test_queue_trigger_execution(self, mock_enqueue, mock_get):
+        mock_get.return_value.status_code = 200
+        settings = frappe.get_single("n8n Settings")
+        settings.enabled = 1
+        settings.base_url = "https://n8n.example.com"
+        settings.api_key = "test_api_key"
+        settings.save()
+        
         provider = N8nPlaybookProvider()
-        playbook_doc = frappe._dict({"n8n_webhook_url": "http://n8n.example.com/webhook"})
+        playbook_doc = frappe._dict({
+            "name": "Test Playbook",
+            "nodes": [frappe._dict({"node_type": "n8n-nodes-base.webhook", "n8n_webhook_id": "12345"})]
+        })
         execution_doc = frappe._dict({"name": "EXEC-001"})
         payload = {"data": "test"}
 
@@ -15,8 +26,8 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
 
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
-            url="http://n8n.example.com/webhook",
-            payload=payload
+            url="https://n8n.example.com/webhook/12345",
+            payload={"data": "test", "execution_id": "EXEC-001"}
         )
 
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
@@ -50,7 +61,10 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.frappe.log_error")
     def test_queue_trigger_execution_missing_url(self, mock_log_error, mock_enqueue):
         provider = N8nPlaybookProvider()
-        playbook_doc = frappe._dict({"n8n_webhook_url": None, "name": "Test Playbook"})
+        playbook_doc = frappe._dict({
+            "name": "Test Playbook",
+            "nodes": []
+        })
         execution_doc = frappe._dict({"name": "EXEC-001"})
         payload = {"data": "test"}
 
