@@ -1,14 +1,30 @@
 app_name = "frappe_n8n"
 app_title = "Frappe n8n"
-app_publisher = "Aurumor"
-app_description = "frappe_n8n is an adapter application that seamlessly integrates the powerful n8n workflow automation platform with Frappe\'s native CRM and ERP ecosystem."
-app_email = "hello@aurumor.com"
+app_publisher = "Aquiveal"
+app_description = "n8n Provider Plugin for Frappe Playbook"
+app_email = "aquiveal@example.com"
 app_license = "mit"
+
+scheduler_events = {
+    "all": [
+        "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.queue_update_playbooks"
+    ],
+    "cron": {
+        "0 0 1 */3 *": [
+            "frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.rotate_credentials"
+        ]
+    }
+}
+
+controller_events = {
+    "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook": {},
+    "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.retrieve_workflow": {}
+}
 
 # Apps
 # ------------------
 
-# required_apps = []
+required_apps = ["frappe_playbook", "frappe_controller"]
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -86,7 +102,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "frappe_n8n.install.before_install"
-# after_install = "frappe_n8n.install.after_install"
+after_install = "frappe_n8n.install.after_install"
 
 # Uninstallation
 # ------------
@@ -139,6 +155,19 @@ app_license = "mit"
 # 		"on_trash": "method"
 # 	}
 # }
+
+controller_events = {
+    "n8n Execution": [
+        {
+            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            "rate_limit_per_minute": 50
+        },
+        {
+            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution",
+            "rate_limit_per_minute": 50
+        }
+    ]
+}
 
 # Scheduled Tasks
 # ---------------
@@ -250,3 +279,19 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+fixtures = [
+    {"dt": "Custom Field", "filters": [
+        [
+            "name", "in", [
+                "Playbook-n8n_workflow_id",
+                "Playbook-n8n_webhook_url",
+                "Playbook Execution-n8n_execution_id"
+            ]
+        ]
+    ]}
+]
+
+playbook_providers = {
+    "n8n": "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.N8nPlaybookProvider"
+}
