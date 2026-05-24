@@ -86,5 +86,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution",
             url=callback_url,
-            payload={"status": "approved"}
+            payload={"status": "approved"},
+            execution_id="EXEC-001"
         )
