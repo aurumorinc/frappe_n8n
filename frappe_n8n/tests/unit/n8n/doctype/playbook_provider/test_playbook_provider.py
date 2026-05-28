@@ -16,8 +16,10 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         self.settings.api_key = "test_api_key"
         self.settings.save()
 
+    @patch("frappe_controller.utils.controller.emit_event")
+    @patch("frappe_controller.utils.controller.wait_for_event")
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.requests.post")
-    def test_create_workflow(self, mock_post):
+    def test_create_workflow(self, mock_post, mock_wait, mock_emit):
         import json
         provider = N8nPlaybookProvider()
         
@@ -42,21 +44,26 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "connections": {}
         }
         
-        # Mock ensure_webhook_credential to avoid actual API calls
         with patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.frappe.get_single") as mock_get_single:
-            settings = frappe.get_doc("n8n Settings")
-            settings.enabled = 1
-            settings.base_url = "https://n8n.example.com"
-            settings.api_key = "test_api_key"
-            settings.webhook_credential_id = "test_cred_id"
-            settings.project_id = None
+            class MockSettings:
+                def __init__(self, cred_id):
+                    self.enabled = 1
+                    self.base_url = "https://n8n.example.com"
+                    self.api_key = "test_api_key"
+                    self.webhook_credential_id = cred_id
+                    self.project_id = None
+                def get_password(self, key):
+                    return getattr(self, key)
             
-            # Mock ensure_webhook_credential on the returned settings object
-            mock_get_single.return_value = settings
-            with patch.object(settings, 'ensure_webhook_credential') as mock_ensure:
-                workflow_id = provider.create_workflow(playbook_doc)
+            settings = MockSettings("")
+            settings_with_cred = MockSettings("test_cred_id")
             
-            mock_ensure.assert_called_once()
+            mock_get_single.side_effect = [settings, settings_with_cred]
+            
+            workflow_id = provider.create_workflow(playbook_doc)
+            
+            mock_wait.assert_called_once_with(event_key="n8n_credential_ready")
+            mock_emit.assert_any_call(key="n8n_workflow_created", argument={"playbook_name": playbook_doc.name})
             self.assertEqual(workflow_id, "new_workflow_id")
             
             # Verify payload
@@ -298,3 +305,28 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         self.assertEqual(playbook.nodes[0].n8n_node_id, "new1")
         
         playbook.delete()
+
+    @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
+    def test_queue_trigger_execution(self, mock_enqueue):
+        provider = N8nPlaybookProvider()
+        
+        class MockDoc:
+            name = "test_name"
+            doctype = "ToDo"
+            def get(self, key, default=None):
+                return []
+                
+        playbook_doc = MockDoc()
+        execution_doc = MockDoc()
+        
+        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", {"data": "test"}, "test-key")
+        
+        mock_enqueue.assert_called_once_with(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            playbook_name="test_name",
+            reference_doctype="ToDo",
+            reference_name="TASK-001",
+            payload={"data": "test"},
+            idempotency_key="test-key",
+            as_child=True
+        )

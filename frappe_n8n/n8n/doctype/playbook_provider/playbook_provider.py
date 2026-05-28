@@ -8,11 +8,15 @@ class N8nPlaybookProvider(PlaybookProviderBase):
         import requests
         import uuid
         import json
+        from frappe_controller.utils.controller import wait_for_event, emit_event
+        
         settings = frappe.get_single("n8n Settings")
         if not settings.enabled or not settings.base_url or not settings.api_key:
             frappe.throw("n8n integration is not enabled or missing credentials.")
             
-        settings.ensure_webhook_credential()
+        if not settings.webhook_credential_id:
+            wait_for_event(event_key="n8n_credential_ready")
+            settings = frappe.get_single("n8n Settings")
             
         url = f"{settings.base_url.rstrip('/')}/api/v1/workflows"
         api_key = settings.get_password("api_key") or settings.api_key
@@ -84,6 +88,8 @@ class N8nPlaybookProvider(PlaybookProviderBase):
                 })
                 
             playbook_doc.save(ignore_permissions=True)
+            
+            emit_event(key="n8n_workflow_created", argument={"playbook_name": playbook_doc.name})
                 
             return workflow_id
         except requests.exceptions.RequestException as e:
@@ -145,28 +151,16 @@ class N8nPlaybookProvider(PlaybookProviderBase):
             frappe.log_error(f"Failed to {action} n8n workflow: {str(e)}", "n8n Integration Error")
             frappe.throw(f"Failed to {action} workflow in n8n. Error: {str(e)}")
             
-    def queue_trigger_execution(self, playbook_doc, execution_doc, payload):
-        webhook_id = None
-        for node in playbook_doc.get("nodes", []):
-            if node.node_type == "n8n-nodes-base.webhook" and node.n8n_webhook_id:
-                webhook_id = node.n8n_webhook_id
-                break
-                
-        if not webhook_id:
-            frappe.log_error(f"Cannot trigger execution for Playbook {playbook_doc.name}: No webhook node found.", "n8n Integration Error")
-            frappe.throw(f"Cannot trigger execution for Playbook {playbook_doc.name}: No webhook node found.")
-            
-        settings = frappe.get_single("n8n Settings")
-        if not settings.enabled or not settings.base_url:
-            frappe.log_error(f"Cannot trigger execution for Playbook {playbook_doc.name}: n8n is not enabled or base_url is missing.", "n8n Integration Error")
-            frappe.throw(f"Cannot trigger execution for Playbook {playbook_doc.name}: n8n is not enabled or base_url is missing.")
-            
-        webhook_url = f"{settings.base_url.rstrip('/')}/webhook/{webhook_id}"
-        
-        # Add execution_id to payload so n8n can call back
-        payload["execution_id"] = execution_doc.name
-        
-        enqueue("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution", url=webhook_url, payload=payload)
+    def queue_trigger_execution(self, playbook_doc, reference_doctype, reference_name, payload, idempotency_key, as_child=True):
+        enqueue(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            playbook_name=playbook_doc.name,
+            reference_doctype=reference_doctype,
+            reference_name=reference_name,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            as_child=as_child
+        )
         
     def queue_resume_execution(self, execution_doc, response_body, callback_url, idempotency_key=None):
         payload = response_body or {}
@@ -314,3 +308,4 @@ def update_a_playbook(playbook_name):
         })
         
     playbook_doc.save(ignore_permissions=True)
+
