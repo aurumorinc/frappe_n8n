@@ -11,8 +11,8 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
     """
 
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
-    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.n8nSettings.ensure_webhook_credential")
-    def setUp(self, mock_ensure, mock_get):
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def setUp(self, mock_enqueue, mock_get):
         super().setUp()
         
 
@@ -52,8 +52,8 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
         self.assertEqual(provider.enabled, 0)
 
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
-    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.n8nSettings.ensure_webhook_credential")
-    def test_n8n_settings_validation_failure(self, mock_ensure, mock_get):
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def test_n8n_settings_validation_failure(self, mock_enqueue, mock_get):
         import requests
         mock_get.side_effect = requests.exceptions.ConnectionError("Connection failed")
         
@@ -65,88 +65,133 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
         
         self.assertEqual(settings.enabled, 0)
 
+    @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.post")
-    def test_ensure_webhook_credential(self, mock_post, mock_get):
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.put")
+    def test_update_webhook_credential(self, mock_put, mock_post, mock_get, mock_emit):
         mock_get.return_value.status_code = 200
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"id": "test_cred_id"}
+        mock_put.return_value.status_code = 200
         
         settings = frappe.get_single("n8n Settings")
-        settings.enabled = 1
-        settings.base_url = "https://n8n.example.com"
-        settings.api_key = "test_api_key"
-        settings.webhook_security = ""
-        settings.webhook_credential_id = ""
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_security", "")
+        settings.db_set("webhook_credential_id", "")
         
-        settings.ensure_webhook_credential()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import update_webhook_credential
+        update_webhook_credential()
         
+        settings.reload()
         self.assertEqual(settings.webhook_credential_id, "test_cred_id")
         mock_post.assert_called_once()
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
 
+    @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.put")
-    def test_ensure_webhook_credential_transfers_project(self, mock_put, mock_patch):
+    def test_update_webhook_credential_transfers_project(self, mock_put, mock_patch, mock_emit):
         mock_patch.return_value.status_code = 200
         mock_put.return_value.status_code = 200
         
         settings = frappe.get_single("n8n Settings")
-        settings.enabled = 1
-        settings.base_url = "https://n8n.example.com"
-        settings.api_key = "test_api_key"
-        settings.webhook_credential_id = "test_cred_id"
-        settings.project_id = "new_project_id"
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_credential_id", "test_cred_id")
+        settings.db_set("project_id", "new_project_id")
         
-        settings.ensure_webhook_credential()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import update_webhook_credential
+        update_webhook_credential()
         
         mock_put.assert_called_once()
         args, kwargs = mock_put.call_args
         self.assertIn("new_project_id", kwargs["json"]["destinationProjectId"])
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
 
+    @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.post")
-    def test_ensure_webhook_credential_recreates_if_deleted(self, mock_post, mock_patch):
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.put")
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
+    def test_update_webhook_credential_recreates_if_deleted(self, mock_get, mock_put, mock_post, mock_patch, mock_emit):
         mock_patch.return_value.status_code = 404
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"id": "new_cred_id"}
+        mock_put.return_value.status_code = 200
+        mock_get.return_value.status_code = 200
         
         settings = frappe.get_single("n8n Settings")
-        settings.enabled = 1
-        settings.base_url = "https://n8n.example.com"
-        settings.api_key = "test_api_key"
-        settings.webhook_credential_id = "old_cred_id"
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_credential_id", "old_cred_id")
         
-        settings.ensure_webhook_credential()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import update_webhook_credential
+        update_webhook_credential()
         
+        settings.reload()
         self.assertEqual(settings.webhook_credential_id, "new_cred_id")
         mock_post.assert_called_once()
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
 
+    @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.put")
-    def test_ensure_webhook_credential_transfers_to_personal(self, mock_put, mock_patch, mock_get):
+    def test_update_webhook_credential_transfers_to_personal(self, mock_put, mock_patch, mock_get, mock_emit):
         mock_patch.return_value.status_code = 200
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"data": [{"id": "personal_id", "type": "personal"}]}
         mock_put.return_value.status_code = 200
         
         settings = frappe.get_single("n8n Settings")
-        settings.enabled = 1
-        settings.base_url = "https://n8n.example.com"
-        settings.api_key = "test_api_key"
-        settings.webhook_credential_id = "test_cred_id"
-        settings.project_id = ""
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_credential_id", "test_cred_id")
+        settings.db_set("project_id", "")
         
-        settings.ensure_webhook_credential()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import update_webhook_credential
+        update_webhook_credential()
         
         mock_put.assert_called_once()
         args, kwargs = mock_put.call_args
         self.assertEqual(kwargs["json"]["destinationProjectId"], "personal_id")
-        
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
+
+    @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
-    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.n8nSettings.ensure_webhook_credential")
-    def test_update_credentials(self, mock_ensure, mock_patch, mock_get):
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.put")
+    def test_update_webhook_credential_finds_by_name(self, mock_put, mock_patch, mock_get, mock_emit):
+        mock_patch.return_value.status_code = 200
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = {"data": [{"id": "found_cred_id", "name": "crm_n8n_api_key"}]}
+        mock_put.return_value.status_code = 200
+        
+        settings = frappe.get_single("n8n Settings")
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_credential_id", "")
+        
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import update_webhook_credential
+        update_webhook_credential()
+        
+        settings.reload()
+        self.assertEqual(settings.webhook_credential_id, "found_cred_id")
+        mock_patch.assert_called_once()
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
+        
+    @patch("frappe_controller.utils.controller.emit_event")
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
+    @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def test_queue_rotate_credentials(self, mock_enqueue, mock_patch, mock_get, mock_emit):
         mock_get.return_value.status_code = 200
         mock_patch.return_value.status_code = 200
         
@@ -158,6 +203,8 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
         settings.webhook_security = "test_webhook_token"
         settings.save()
         
-        settings.update_credentials()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import queue_rotate_credentials
+        queue_rotate_credentials()
         
         mock_patch.assert_called_once()
+        mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
