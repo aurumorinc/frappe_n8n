@@ -7,7 +7,8 @@ app_license = "mit"
 
 scheduler_events = {
     "all": [
-        "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.queue_update_playbooks"
+        "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.queue_update_playbooks",
+        "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.poll_executions"
     ],
     "cron": {
         "0 0 1 */3 *": [
