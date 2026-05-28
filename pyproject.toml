@@ -1,9 +1,9 @@
 [project]
 name = "frappe_n8n"
 authors = [
-    { name = "Aurumor", email = "hello@aurumor.com"}
+    { name = "Aquiveal", email = "aquiveal@example.com"}
 ]
-description = "frappe_n8n is an adapter application that seamlessly integrates the powerful n8n workflow automation platform with Frappe's native CRM and ERP ecosystem."
+description = "n8n Provider Plugin for Frappe Playbook"
 requires-python = ">=3.14"
 readme = "README.md"
 dynamic = ["version"]

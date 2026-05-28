@@ -1,6 +1,14 @@
 ### Frappe n8n
 
-frappe_n8n is an adapter application that seamlessly integrates the powerful n8n workflow automation platform with Frappe\'s native CRM and ERP ecosystem.
+**Version:** 16.0.1
+
+Frappe n8n is a powerful provider plugin for the Frappe Playbook ecosystem. It seamlessly integrates your Frappe applications with n8n, the leading fair-code workflow automation tool. By acting as a bridge between Frappe Playbook and n8n, this app allows you to trigger, manage, and monitor complex n8n workflows directly from within your Frappe environment.
+
+**Key Features:**
+- **Automated Workflow Execution:** Trigger n8n workflows automatically based on Frappe document events (e.g., when a Lead is created or a Deal is won).
+- **Playbook Integration:** Fully compatible with the Frappe Playbook architecture, allowing you to define conditions and filters for when workflows should run.
+- **Execution Tracking:** Monitor the status of your n8n workflow executions (Running, Success, Error, Canceled) directly from the Frappe interface.
+- **Seamless Authentication:** Manage n8n API credentials and webhook configurations securely within Frappe.
 
 ### Installation
 

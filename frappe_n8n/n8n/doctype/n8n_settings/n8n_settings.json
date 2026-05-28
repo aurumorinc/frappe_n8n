@@ -1,0 +1,79 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-22 22:21:50.177757",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "base_url",
+  "api_key",
+  "enabled",
+  "webhook_security",
+  "webhook_credential_id",
+  "project_id"
+ ],
+ "fields": [
+  {
+   "fieldname": "base_url",
+   "fieldtype": "Data",
+   "label": "Base URL"
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key"
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "description": "Optional token to verify incoming webhooks from n8n",
+   "fieldname": "webhook_security",
+   "fieldtype": "Password",
+   "label": "Webhook Security"
+  },
+  {
+   "fieldname": "webhook_credential_id",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Webhook Credential ID",
+   "read_only": 1
+  },
+  {
+   "description": "Optional n8n Project ID to place new workflows in",
+   "fieldname": "project_id",
+   "fieldtype": "Data",
+   "label": "Project ID"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-05-23 01:48:28.712559",
+ "modified_by": "Administrator",
+ "module": "n8n",
+ "name": "n8n Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
