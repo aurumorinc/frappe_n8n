@@ -19,15 +19,19 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "name": "Test Playbook",
             "nodes": [frappe._dict({"node_type": "n8n-nodes-base.webhook", "n8n_webhook_id": "12345"})]
         })
-        execution_doc = frappe._dict({"name": "EXEC-001"})
         payload = {"data": "test"}
+        idempotency_key = "test-key"
 
-        provider.queue_trigger_execution(playbook_doc, execution_doc, payload)
+        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, idempotency_key)
 
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
-            url="https://n8n.example.com/webhook/12345",
-            payload={"data": "test", "execution_id": "EXEC-001"}
+            playbook_name="Test Playbook",
+            reference_doctype="ToDo",
+            reference_name="TASK-001",
+            payload={"data": "test"},
+            idempotency_key=idempotency_key,
+            as_child=True
         )
 
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
@@ -58,21 +62,27 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         )
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
-    @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.frappe.log_error")
-    def test_queue_trigger_execution_missing_url(self, mock_log_error, mock_enqueue):
+    def test_queue_trigger_execution_missing_url(self, mock_enqueue):
         provider = N8nPlaybookProvider()
         playbook_doc = frappe._dict({
             "name": "Test Playbook",
             "nodes": []
         })
-        execution_doc = frappe._dict({"name": "EXEC-001"})
         payload = {"data": "test"}
+        idempotency_key = "test-key"
 
-        with self.assertRaises(frappe.exceptions.ValidationError):
-            provider.queue_trigger_execution(playbook_doc, execution_doc, payload)
+        # It should no longer raise an error, but enqueue the prepare job
+        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, idempotency_key)
 
-        mock_enqueue.assert_not_called()
-        mock_log_error.assert_called_once()
+        mock_enqueue.assert_called_once_with(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            playbook_name="Test Playbook",
+            reference_doctype="ToDo",
+            reference_name="TASK-001",
+            payload={"data": "test"},
+            idempotency_key=idempotency_key,
+            as_child=True
+        )
         
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
     def test_queue_resume_execution(self, mock_enqueue):
