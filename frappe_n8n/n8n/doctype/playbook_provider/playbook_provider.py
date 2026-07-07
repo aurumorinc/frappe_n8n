@@ -162,6 +162,17 @@ class N8nPlaybookProvider(PlaybookProviderBase):
             as_child=as_child
         )
         
+    def queue_test_execution(self, playbook_doc, reference_doctype, reference_name, payload, idempotency_key, as_child=True):
+        enqueue(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_test_execution",
+            playbook_name=playbook_doc.name,
+            reference_doctype=reference_doctype,
+            reference_name=reference_name,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            as_child=as_child
+        )
+        
     def queue_resume_execution(self, execution_doc, response_body, callback_url, idempotency_key=None):
         payload = response_body or {}
         if isinstance(payload, str):
