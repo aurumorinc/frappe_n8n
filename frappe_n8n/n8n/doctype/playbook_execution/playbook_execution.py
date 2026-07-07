@@ -92,6 +92,87 @@ def trigger_execution(playbook_name, reference_doctype, reference_name, payload,
         frappe.log_error(f"Failed to trigger n8n execution: {e}", "n8n Execution Error")
         raise
 
+def trigger_test_execution(playbook_name, reference_doctype, reference_name, payload, idempotency_key):
+    from frappe_controller.utils.controller import wait_for_event
+    
+    if frappe.db.exists("Playbook Execution", {"idempotency_key": idempotency_key}):
+        return
+
+    playbook_doc = frappe.get_doc("Playbook", playbook_name)
+    
+    webhook_id = None
+    for node in playbook_doc.get("nodes", []):
+        if node.node_type == "n8n-nodes-base.webhook" and node.n8n_webhook_id:
+            webhook_id = node.n8n_webhook_id
+            break
+            
+    if not webhook_id:
+        wait_for_event(
+            event_key="n8n_workflow_created",
+            condition=f"argument.get('playbook_name') == '{playbook_name}'"
+        )
+        playbook_doc = frappe.get_doc("Playbook", playbook_name)
+        for node in playbook_doc.get("nodes", []):
+            if node.node_type == "n8n-nodes-base.webhook" and node.n8n_webhook_id:
+                webhook_id = node.n8n_webhook_id
+                break
+                
+    if not webhook_id:
+        frappe.log_error(f"Cannot trigger test execution for Playbook {playbook_name}: No webhook node found even after waiting.", "n8n Integration Error")
+        raise ValueError(f"No webhook node found for Playbook {playbook_name}")
+        
+    settings = frappe.get_single("n8n Settings")
+    if not settings.enabled or not settings.base_url:
+        frappe.log_error(f"Cannot trigger test execution for Playbook {playbook_name}: n8n is not enabled or base_url is missing.", "n8n Integration Error")
+        raise ValueError(f"n8n is not enabled or base_url is missing")
+        
+    url = f"{settings.base_url.rstrip('/')}/webhook-test/{webhook_id}"
+    
+    try:
+        provisional_name = frappe.generate_hash(length=10)
+        cloudevent_id = str(uuid.uuid4())
+        attributes = {
+            "type": "playbook.execution.triggered",
+            "source": "frappe",
+            "id": cloudevent_id,
+            "name": provisional_name
+        }
+        event = CloudEvent(attributes, payload)
+        headers, data = to_structured(event)
+        
+        headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+        headers["Content-Type"] = "application/json"
+        
+        webhook_security = settings.get_password("webhook_security", raise_exception=False) or settings.webhook_security
+        if webhook_security:
+            headers["Authorization"] = f"Bearer {webhook_security}"
+        
+        response = requests.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
+        
+        execution_doc = frappe.get_doc({
+            "doctype": "Playbook Execution",
+            "name": provisional_name,
+            "playbook": playbook_name,
+            "reference_doctype": reference_doctype,
+            "reference_name": reference_name,
+            "status": "running",
+            "idempotency_key": idempotency_key,
+            "n8n_execution_id": None
+        })
+        execution_doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        from frappe_controller.utils.background_jobs import enqueue
+        enqueue(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.retrieve_executions",
+            playbook_name=playbook_name
+        )
+        
+    except Exception as e:
+        frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
+        raise
+
 def retrieve_executions(playbook_name):
     playbook_doc = frappe.get_doc("Playbook", playbook_name)
     if not playbook_doc.n8n_workflow_id:
