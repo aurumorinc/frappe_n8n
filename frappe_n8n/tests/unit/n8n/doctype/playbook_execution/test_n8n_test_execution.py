@@ -5,10 +5,9 @@ from requests.exceptions import RequestException
 import uuid
 
 class TestN8nTestExecutionUnit(unittest.TestCase):
-    @patch("frappe_controller.utils.background_jobs.enqueue")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
-    def test_n8n_test_execution_webhook_url(self, mock_frappe, mock_post, mock_enqueue):
+    def test_n8n_test_execution_webhook_url(self, mock_frappe, mock_post):
         # Arrange
         mock_frappe.db.exists.return_value = False
         mock_frappe.generate_hash.return_value = "hash123"
@@ -47,8 +46,10 @@ class TestN8nTestExecutionUnit(unittest.TestCase):
         # Assert
         mock_post.assert_called_once()
         url = mock_post.call_args[0][0]
+        kwargs = mock_post.call_args[1]
         self.assertEqual(url, "https://n8n.example.com/webhook-test/test-webhook-123")
-        mock_enqueue.assert_called_once()
+        self.assertEqual(kwargs["json"], {"data": "test"})
+        self.assertEqual(kwargs["headers"]["Frappe-Playbook-Execution-Name"], "idemp-key")
 
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
     @patch("frappe_controller.utils.controller.wait_for_event")

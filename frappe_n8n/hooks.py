@@ -7,8 +7,7 @@ app_license = "mit"
 
 scheduler_events = {
     "all": [
-        "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.queue_update_playbooks",
-        "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.poll_executions"
+        "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.queue_update_playbooks"
     ],
     "cron": {
         "0 0 1 */3 *": [
@@ -149,13 +148,11 @@ after_install = "frappe_n8n.install.after_install"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "Playbook": {
+        "after_save": "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.after_save"
+    }
+}
 
 controller_events = {
     "n8n Execution": [

@@ -14,7 +14,7 @@ class TestN8nProviderTestExecutionUnit(unittest.TestCase):
             playbook_doc,
             "Test Doc",
             "TEST-001",
-            {"doc": {"name": "TEST-001"}},
+            {"name": "TEST-001"},
             "test-key",
             as_child=False
         )
@@ -24,7 +24,7 @@ class TestN8nProviderTestExecutionUnit(unittest.TestCase):
             playbook_name="Test Playbook",
             reference_doctype="Test Doc",
             reference_name="TEST-001",
-            payload={"doc": {"name": "TEST-001"}},
-            idempotency_key="test-key",
+            payload={"name": "TEST-001"},
+            execution_name="test-key",
             as_child=False
         )

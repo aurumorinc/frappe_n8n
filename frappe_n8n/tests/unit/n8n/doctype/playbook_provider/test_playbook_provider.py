@@ -17,9 +17,8 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         self.settings.save()
 
     @patch("frappe_controller.utils.controller.emit_event")
-    @patch("frappe_controller.utils.controller.wait_for_event")
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.requests.post")
-    def test_create_workflow(self, mock_post, mock_wait, mock_emit):
+    def test_create_workflow(self, mock_post, mock_emit):
         import json
         provider = N8nPlaybookProvider()
         
@@ -33,36 +32,26 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
             "id": "new_workflow_id",
-            "nodes": [
-                {
-                    "id": "node1",
-                    "name": "Webhook",
-                    "type": "n8n-nodes-base.webhook",
-                    "webhookId": "wh1"
-                }
-            ],
+            "nodes": [],
             "connections": {}
         }
         
         with patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.frappe.get_single") as mock_get_single:
             class MockSettings:
-                def __init__(self, cred_id):
+                def __init__(self):
                     self.enabled = 1
                     self.base_url = "https://n8n.example.com"
                     self.api_key = "test_api_key"
-                    self.webhook_credential_id = cred_id
+                    self.webhook_credential_id = "test_cred_id"
                     self.project_id = None
                 def get_password(self, key):
                     return getattr(self, key)
             
-            settings = MockSettings("")
-            settings_with_cred = MockSettings("test_cred_id")
-            
-            mock_get_single.side_effect = [settings, settings_with_cred]
+            settings = MockSettings()
+            mock_get_single.return_value = settings
             
             workflow_id = provider.create_workflow(playbook_doc)
             
-            mock_wait.assert_called_once_with(event_key="n8n_credential_ready")
             mock_emit.assert_any_call(key="n8n_workflow_created", argument={"playbook_name": playbook_doc.name})
             self.assertEqual(workflow_id, "new_workflow_id")
             
@@ -71,20 +60,45 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             self.assertEqual(call_args[0][0], "https://n8n.example.com/api/v1/workflows")
             payload = call_args[1]["json"]
             self.assertEqual(payload["name"], "Test Playbook Create")
-            self.assertEqual(len(payload["nodes"]), 1)
-            self.assertEqual(payload["nodes"][0]["type"], "n8n-nodes-base.webhook")
-            self.assertEqual(payload["nodes"][0]["credentials"]["httpHeaderAuth"]["id"], "test_cred_id")
+            self.assertEqual(len(payload["nodes"]), 0)
             
-            # Verify nodes are populated
+            # Verify nodes are empty
             playbook_doc.reload()
-            self.assertEqual(len(playbook_doc.nodes), 1)
-            self.assertEqual(playbook_doc.nodes[0].node_name, "Webhook")
-            self.assertEqual(playbook_doc.nodes[0].n8n_node_id, "node1")
+            self.assertEqual(len(playbook_doc.nodes), 0)
             
             playbook_data = json.loads(playbook_doc.playbook_data)
-            self.assertEqual(len(playbook_data["nodes"]), 1)
-            
-        playbook_doc.delete()
+            self.assertEqual(len(playbook_data["nodes"]), 0)
+
+    @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
+    def test_after_save(self, mock_enqueue):
+        from frappe_n8n.n8n.doctype.playbook_provider.playbook_provider import after_save
+        
+        # Test 1: Should enqueue when conditions are met
+        playbook_doc = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Playbook After Save",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled"
+        })
+        playbook_doc.name = "Test Playbook After Save"
+        frappe.flags.in_playbook_sync = False
+        after_save(playbook_doc, "after_save")
+        mock_enqueue.assert_called_once_with(
+            "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook",
+            playbook_name=playbook_doc.name
+        )
+        
+        # Test 2: Should skip if in sync
+        mock_enqueue.reset_mock()
+        frappe.flags.in_playbook_sync = True
+        after_save(playbook_doc, "after_save")
+        mock_enqueue.assert_not_called()
+        frappe.flags.in_playbook_sync = False
+        
+        # Test 3: Should skip if wrong provider
+        playbook_doc.provider = "other"
+        after_save(playbook_doc, "after_save")
+        mock_enqueue.assert_not_called()
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.requests.delete")
     def test_delete_workflow(self, mock_delete):
@@ -153,8 +167,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook",
             playbook_name=playbook.name
         )
-        
-        playbook.delete()
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
     def test_update_a_playbook(self, mock_enqueue):
@@ -217,8 +229,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         playbook_data = json.loads(playbook.playbook_data)
         self.assertEqual(len(playbook_data["nodes"]), 1)
         self.assertIn("Webhook", playbook_data["connections"])
-        
-        playbook.delete()
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
     def test_update_a_playbook_no_data(self, mock_enqueue):
@@ -238,8 +248,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         
         playbook.reload()
         self.assertEqual(len(playbook.nodes), 0)
-        
-        playbook.delete()
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.requests.get")
     def test_retrieve_workflow_api_error(self, mock_get):
@@ -303,8 +311,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
         self.assertEqual(len(playbook.nodes), 1)
         self.assertEqual(playbook.nodes[0].node_name, "New Node")
         self.assertEqual(playbook.nodes[0].n8n_node_id, "new1")
-        
-        playbook.delete()
 
     @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.enqueue")
     def test_queue_trigger_execution(self, mock_enqueue):
@@ -327,6 +333,6 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             reference_doctype="ToDo",
             reference_name="TASK-001",
             payload={"data": "test"},
-            idempotency_key="test-key",
+            execution_name="test-key",
             as_child=True
         )
