@@ -20,9 +20,9 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "nodes": [frappe._dict({"node_type": "n8n-nodes-base.webhook", "n8n_webhook_id": "12345"})]
         })
         payload = {"data": "test"}
-        idempotency_key = "test-key"
+        execution_name = "test-key"
 
-        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, idempotency_key)
+        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, execution_name)
 
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
@@ -30,7 +30,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             reference_doctype="ToDo",
             reference_name="TASK-001",
             payload={"data": "test"},
-            idempotency_key=idempotency_key,
+            execution_name=execution_name,
             as_child=True
         )
 
@@ -69,10 +69,10 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             "nodes": []
         })
         payload = {"data": "test"}
-        idempotency_key = "test-key"
+        execution_name = "test-key"
 
         # It should no longer raise an error, but enqueue the prepare job
-        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, idempotency_key)
+        provider.queue_trigger_execution(playbook_doc, "ToDo", "TASK-001", payload, execution_name)
 
         mock_enqueue.assert_called_once_with(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
@@ -80,7 +80,7 @@ class TestN8nPlaybookProvider(IntegrationTestCase):
             reference_doctype="ToDo",
             reference_name="TASK-001",
             payload={"data": "test"},
-            idempotency_key=idempotency_key,
+            execution_name=execution_name,
             as_child=True
         )
         

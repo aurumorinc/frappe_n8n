@@ -5,11 +5,6 @@ import requests
 from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_execution, resume_execution
 
 class TestN8nPlaybookExecution(IntegrationTestCase):
-    def setUp(self):
-        super().setUp()
-        frappe.db.delete("Playbook", {"playbook_name": ["like", "Test Playbook%"]})
-        frappe.db.delete("Playbook Execution", {"playbook": ["like", "Test Playbook%"]})
-
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     @patch("frappe_controller.utils.controller.wait_for_event")
     def test_trigger_execution_success(self, mock_wait, mock_post):
@@ -44,19 +39,14 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
         self.assertEqual(args[0], "https://n8n.example.com/webhook/wh1")
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test_token")
+        self.assertEqual(kwargs["headers"]["Frappe-Playbook-Execution-Name"], "test-key")
         self.assertEqual(kwargs["timeout"], 10)
-        self.assertIn(b'"data": {"data": "test"}', kwargs["data"])
-        self.assertIn(b'"type": "playbook.execution.triggered"', kwargs["data"])
-        self.assertIn(b'"name":', kwargs["data"]) # Verify provisional name was sent
+        self.assertEqual(kwargs["json"], {"data": "test"})
         
         # Verify execution doc was created
-        executions = frappe.get_all("Playbook Execution", filters={"idempotency_key": "test-key"}, fields=["status", "name"])
+        executions = frappe.get_all("Playbook Execution", filters={"name": "test-key"}, fields=["status", "name"])
         self.assertEqual(len(executions), 1)
         self.assertEqual(executions[0].status, "running")
-        
-        frappe.db.delete("Playbook Execution", {"idempotency_key": "test-key"})
-        playbook.delete()
-        todo.delete()
         
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe.log_error")
@@ -91,11 +81,8 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
         mock_log_error.assert_called_once()
         
         # Verify no execution doc was created
-        executions = frappe.get_all("Playbook Execution", filters={"idempotency_key": "test-key"})
+        executions = frappe.get_all("Playbook Execution", filters={"name": "test-key"})
         self.assertEqual(len(executions), 0)
-        
-        playbook.delete()
-        todo.delete()
         
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
     def test_resume_execution_success(self, mock_post):
@@ -124,102 +111,112 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
             resume_execution("http://example.com", {"status": "approved"})
             
         mock_log_error.assert_called_once()
-
-    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.get")
-    def test_retrieve_executions(self, mock_get):
-        mock_get.return_value.raise_for_status.return_value = None
-        mock_get.return_value.json.return_value = {
-            "data": [
-                {
-                    "id": "123",
-                    "status": "success",
-                    "mode": "webhook",
-                    "data": {
-                        "resultData": {
-                            "runData": {
-                                "Webhook": [
-                                    {
-                                        "data": {
-                                            "main": [
-                                                [
-                                                    {
-                                                        "json": {
-                                                            "name": "test_exec_1"
-                                                        }
-                                                    }
-                                                ]
-                                            ]
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-                    }
-                }
-            ]
-        }
         
-        settings = frappe.get_single("n8n Settings")
-        settings.db_set("enabled", 1)
-        settings.db_set("base_url", "https://n8n.example.com")
-        
-        playbook_name = "Test Playbook Retrieve"
-        if frappe.db.exists("Playbook", playbook_name):
-            frappe.delete_doc("Playbook", playbook_name)
-
+    def test_callback_success(self):
+        import json
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
         playbook = frappe.get_doc({
             "doctype": "Playbook",
-            "playbook_name": playbook_name,
+            "playbook_name": "Test Callback Playbook",
             "provider": "n8n",
             "document_type": "ToDo", "status": "Enabled",
-            "n8n_workflow_id": "wf1"
         }).insert()
         
         execution = frappe.get_doc({
             "doctype": "Playbook Execution",
+            "name": "test-callback-exec",
             "playbook": playbook.name,
+            "reference_doctype": "ToDo",
+            "reference_name": todo.name,
             "status": "running"
-        }).insert(ignore_permissions=True)
+        }).insert(ignore_permissions=True, ignore_links=True)
         
-        mock_get.return_value.json.return_value["data"][0]["data"]["resultData"]["runData"]["Webhook"][0]["data"]["main"][0][0]["json"]["name"] = execution.name
+        from frappe_n8n.playbook_execution import callback
         
-        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import retrieve_executions
-        retrieve_executions(playbook.name)
+        payload = {
+            "status": "success",
+            "execution": {"id": "n8n-12345"},
+            "execution_data": {"test_key": "test_value"},
+            "playbook": "Should Not Update",
+            "unknown_field": "Should be ignored"
+        }
+        
+        result = callback(execution_name=execution.name, **payload)
         
         execution.reload()
-        self.assertEqual(execution.n8n_execution_id, "123")
         self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.n8n_execution_id, "n8n-12345")
         
-        frappe.delete_doc("Playbook Execution", execution.name)
-        playbook.delete()
+        # Verify execution_data was serialized to string
+        self.assertEqual(execution.execution_data, json.dumps({"test_key": "test_value"}))
+        
+        # Verify disallowed fields were not updated
+        self.assertEqual(execution.playbook, playbook.name)
+        
+        # Verify returned result is the updated document dict
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("name"), "test-callback-exec")
+        
+    def test_callback_not_found_but_create(self):
+        from frappe_n8n.playbook_execution import callback
+        import json
 
-    @patch("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.N8nPlaybookProvider.get_execution_status")
-    def test_poll_executions(self, mock_get_status):
-        mock_get_status.return_value = {"status": "success"}
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Callback Playbook Create",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
         
-        settings = frappe.get_single("n8n Settings")
-        settings.db_set("enabled", 1)
-        settings.db_set("base_url", "https://n8n.example.com")
+        payload = {
+            "status": "success",
+            "playbook": playbook.name,
+            "reference_doctype": "ToDo",
+            "reference_name": todo.name,
+            "execution": {"id": "n8n-create-123"},
+            "execution_data": {"created": True}
+        }
+        
+        result = callback(execution_name="new-exec-123", **payload)
+        
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("name"), "new-exec-123")
+        self.assertEqual(result.get("playbook"), playbook.name)
+        
+        # Verify it was inserted in db
+        execution = frappe.get_doc("Playbook Execution", "new-exec-123")
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.n8n_execution_id, "n8n-create-123")
+        self.assertEqual(execution.execution_data, json.dumps({"created": True}))
+
+    def test_callback_create_no_name(self):
+        from frappe_n8n.playbook_execution import callback
         
         playbook = frappe.get_doc({
             "doctype": "Playbook",
-            "playbook_name": "Test Playbook Poll",
+            "playbook_name": "Test Callback Playbook No Name",
             "provider": "n8n",
-            "document_type": "ToDo", "status": "Enabled"
+            "document_type": "ToDo", "status": "Enabled",
         }).insert()
         
-        execution = frappe.get_doc({
-            "doctype": "Playbook Execution",
-            "playbook": playbook.name,
-            "status": "running",
-            "n8n_execution_id": "456"
-        }).insert(ignore_permissions=True)
+        payload = {
+            "status": "success",
+            "playbook": playbook.name
+        }
         
-        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import poll_executions
-        poll_executions()
+        result = callback(**payload)
         
-        execution.reload()
-        self.assertEqual(execution.status, "success")
+        self.assertEqual(result.get("status"), "success")
+        self.assertIsNotNone(result.get("name"))
+        self.assertEqual(len(result.get("name")), 10)
         
-        frappe.delete_doc("Playbook Execution", execution.name)
-        playbook.delete()
+    def test_callback_create_missing_playbook(self):
+        from frappe_n8n.playbook_execution import callback
+        
+        payload = {
+            "status": "success"
+        }
+        
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            callback(execution_name="non-existent-exec", **payload)

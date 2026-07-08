@@ -6,17 +6,12 @@ from frappe_controller.utils.background_jobs import enqueue
 class N8nPlaybookProvider(PlaybookProviderBase):
     def create_workflow(self, playbook_doc):
         import requests
-        import uuid
         import json
-        from frappe_controller.utils.controller import wait_for_event, emit_event
+        from frappe_controller.utils.controller import emit_event
         
         settings = frappe.get_single("n8n Settings")
         if not settings.enabled or not settings.base_url or not settings.api_key:
             frappe.throw("n8n integration is not enabled or missing credentials.")
-            
-        if not settings.webhook_credential_id:
-            wait_for_event(event_key="n8n_credential_ready")
-            settings = frappe.get_single("n8n Settings")
             
         url = f"{settings.base_url.rstrip('/')}/api/v1/workflows"
         api_key = settings.get_password("api_key") or settings.api_key
@@ -26,32 +21,9 @@ class N8nPlaybookProvider(PlaybookProviderBase):
             "Content-Type": "application/json"
         }
         
-        webhook_id = str(uuid.uuid4())
-        
         payload = {
             "name": playbook_doc.playbook_name,
-            "nodes": [
-                {
-                    "parameters": {
-                        "httpMethod": "POST",
-                        "path": webhook_id,
-                        "authentication": "headerAuth",
-                        "options": {}
-                    },
-                    "type": "n8n-nodes-base.webhook",
-                    "typeVersion": 1,
-                    "position": [0, 0],
-                    "id": str(uuid.uuid4()),
-                    "name": "Webhook",
-                    "webhookId": webhook_id,
-                    "credentials": {
-                        "httpHeaderAuth": {
-                            "id": settings.webhook_credential_id,
-                            "name": "crm_n8n_api_key"
-                        }
-                    }
-                }
-            ],
+            "nodes": [],
             "connections": {},
             "settings": {}
         }
@@ -151,29 +123,29 @@ class N8nPlaybookProvider(PlaybookProviderBase):
             frappe.log_error(f"Failed to {action} n8n workflow: {str(e)}", "n8n Integration Error")
             frappe.throw(f"Failed to {action} workflow in n8n. Error: {str(e)}")
             
-    def queue_trigger_execution(self, playbook_doc, reference_doctype, reference_name, payload, idempotency_key, as_child=True):
+    def queue_trigger_execution(self, playbook_doc, reference_doctype, reference_name, payload, execution_name, as_child=True):
         enqueue(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
             playbook_name=playbook_doc.name,
             reference_doctype=reference_doctype,
             reference_name=reference_name,
             payload=payload,
-            idempotency_key=idempotency_key,
+            execution_name=execution_name,
             as_child=as_child
         )
         
-    def queue_test_execution(self, playbook_doc, reference_doctype, reference_name, payload, idempotency_key, as_child=True):
+    def queue_test_execution(self, playbook_doc, reference_doctype, reference_name, payload, execution_name, as_child=True):
         enqueue(
             "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_test_execution",
             playbook_name=playbook_doc.name,
             reference_doctype=reference_doctype,
             reference_name=reference_name,
             payload=payload,
-            idempotency_key=idempotency_key,
+            execution_name=execution_name,
             as_child=as_child
         )
         
-    def queue_resume_execution(self, execution_doc, response_body, callback_url, idempotency_key=None):
+    def queue_resume_execution(self, execution_doc, response_body, callback_url, execution_name=None):
         payload = response_body or {}
         if isinstance(payload, str):
             try:
@@ -181,9 +153,30 @@ class N8nPlaybookProvider(PlaybookProviderBase):
                 payload = json.loads(payload)
             except Exception:
                 payload = {"data": payload}
-        if idempotency_key:
-            payload["idempotency_key"] = idempotency_key
+        if execution_name:
+            payload["execution_name"] = execution_name
         enqueue("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution", url=callback_url, payload=payload, execution_id=execution_doc.name)
+
+    def replay_execution(self, execution_doc, payload):
+        from frappe_controller.utils.background_jobs import enqueue
+        enqueue(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.send_webhook",
+            playbook_name=execution_doc.playbook,
+            payload=payload,
+            execution_name=execution_doc.name
+        )
+
+    def get_debug_url(self, execution_doc):
+        if not execution_doc.get("n8n_execution_id"):
+            return None
+            
+        playbook = frappe.get_doc("Playbook", execution_doc.playbook)
+        settings = frappe.get_single("n8n Settings")
+        
+        if not settings.base_url or not playbook.n8n_workflow_id:
+            return None
+            
+        return f"{settings.base_url.rstrip('/')}/workflow/{playbook.n8n_workflow_id}/debug/{execution_doc.n8n_execution_id}"
         
     def get_execution_status(self, execution_id):
         import requests
@@ -286,6 +279,10 @@ def retrieve_workflow(playbook_name):
     provider = get_provider_instance(playbook_doc.provider)
     return provider.retrieve_workflow(playbook_doc.n8n_workflow_id)
 
+def after_save(doc, method):
+    if doc.provider == "n8n" and not getattr(frappe.flags, "in_playbook_sync", False):
+        enqueue("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name=doc.name)
+
 def update_a_playbook(playbook_name):
     import json
     playbook_data = enqueue("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.retrieve_workflow", playbook_name=playbook_name).result()
@@ -318,5 +315,9 @@ def update_a_playbook(playbook_name):
             "n8n_webhook_id": node.get("webhookId", "")
         })
         
-    playbook_doc.save(ignore_permissions=True)
+    frappe.flags.in_playbook_sync = True
+    try:
+        playbook_doc.save(ignore_permissions=True)
+    finally:
+        frappe.flags.in_playbook_sync = False
 
