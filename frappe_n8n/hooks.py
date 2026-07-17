@@ -149,9 +149,27 @@ after_install = "frappe_n8n.install.after_install"
 # Hook on document methods and events
 
 doc_events = {
+    "Playbook Provider": {
+        "on_update": "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.on_update"
+    },
     "Playbook": {
-        "after_save": "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.after_save"
+        "on_update": "frappe_n8n.n8n.doctype.playbook.playbook.on_update",
+        "on_trash": "frappe_n8n.n8n.doctype.playbook.playbook.on_trash"
+    },
+    "Playbook Execution": {
+        "after_insert": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.after_insert",
+        "on_update": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.on_update"
+    },
+    "ToDo": {
+        "on_update": "frappe_n8n.n8n.doctype.todo.todo.on_update"
     }
+}
+
+override_whitelisted_methods = {
+    "frappe_playbook.playbook.doctype.playbook.playbook.get_builder_url": "frappe_n8n.n8n.doctype.playbook.playbook.get_builder_url",
+    "frappe_playbook.playbook.doctype.playbook.playbook.trigger_test_execution": "frappe_n8n.n8n.doctype.playbook.playbook.trigger_test_execution",
+    "frappe_playbook.playbook.doctype.playbook_execution.playbook_execution.get_debug_url": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.get_debug_url",
+    "frappe_playbook.playbook.doctype.playbook_execution.playbook_execution.replay": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.replay"
 }
 
 controller_events = {
@@ -279,17 +297,5 @@ controller_events = {
 
 
 fixtures = [
-    {"dt": "Custom Field", "filters": [
-        [
-            "name", "in", [
-                "Playbook-n8n_workflow_id",
-                "Playbook-n8n_webhook_url",
-                "Playbook Execution-n8n_execution_id"
-            ]
-        ]
-    ]}
+	{"dt": "Custom Field", "filters": [["module", "=", "n8n"]]}
 ]
-
-playbook_providers = {
-    "n8n": "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.N8nPlaybookProvider"
-}
