@@ -279,15 +279,7 @@ controller_events = {
 
 
 fixtures = [
-    {"dt": "Custom Field", "filters": [
-        [
-            "name", "in", [
-                "Playbook-n8n_workflow_id",
-                "Playbook-n8n_webhook_url",
-                "Playbook Execution-n8n_execution_id"
-            ]
-        ]
-    ]}
+	{"dt": "Custom Field", "filters": [["module", "=", "n8n"]]}
 ]
 
 playbook_providers = {
