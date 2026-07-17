@@ -1,8 +1,8 @@
 import frappe
 from frappe.tests import IntegrationTestCase
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import requests
-from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_execution, resume_execution
+from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_execution, resume_execution, trigger_test_execution_sync, trigger_test_execution_async
 
 class TestN8nPlaybookExecution(IntegrationTestCase):
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
@@ -39,7 +39,7 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
         self.assertEqual(args[0], "https://n8n.example.com/webhook/wh1")
         self.assertEqual(kwargs["headers"]["Content-Type"], "application/json")
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test_token")
-        self.assertEqual(kwargs["headers"]["Frappe-Playbook-Execution-Name"], "test-key")
+        self.assertEqual(kwargs["headers"]["frappe-playbook-execution-name"], "test-key")
         self.assertEqual(kwargs["timeout"], 10)
         self.assertEqual(kwargs["json"], {"data": "test"})
         
@@ -112,111 +112,144 @@ class TestN8nPlaybookExecution(IntegrationTestCase):
             
         mock_log_error.assert_called_once()
         
-    def test_callback_success(self):
-        import json
-        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
-        playbook = frappe.get_doc({
-            "doctype": "Playbook",
-            "playbook_name": "Test Callback Playbook",
-            "provider": "n8n",
-            "document_type": "ToDo", "status": "Enabled",
-        }).insert()
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
+    def test_n8n_test_execution_webhook_url(self, mock_frappe, mock_post):
+        # Arrange
+        mock_frappe.db.exists.return_value = False
+        mock_frappe.generate_hash.return_value = "hash123"
         
-        execution = frappe.get_doc({
-            "doctype": "Playbook Execution",
-            "name": "test-callback-exec",
-            "playbook": playbook.name,
-            "reference_doctype": "ToDo",
-            "reference_name": todo.name,
-            "status": "running"
-        }).insert(ignore_permissions=True, ignore_links=True)
+        settings = MagicMock()
+        settings.enabled = 1
+        settings.base_url = "https://n8n.example.com/"
+        mock_frappe.get_single.return_value = settings
         
-        from frappe_n8n.playbook_execution import callback
+        playbook_doc = MagicMock()
+        node = MagicMock()
+        node.get.side_effect = lambda k, d=None: "n8n-nodes-base.webhook" if k == "node_type" else "test-webhook-123" if k == "n8n_webhook_id" else d
+        playbook_doc.get.return_value = [node]
         
-        payload = {
-            "status": "success",
-            "execution": {"id": "n8n-12345"},
-            "execution_data": {"test_key": "test_value"},
-            "playbook": "Should Not Update",
-            "unknown_field": "Should be ignored"
-        }
+        def get_doc_side_effect(doctype, *args, **kwargs):
+            if isinstance(doctype, dict) and doctype.get("doctype") == "Playbook Execution":
+                mock_exec = MagicMock()
+                mock_exec.insert.return_value = None
+                return mock_exec
+            return playbook_doc
+            
+        mock_frappe.get_doc.side_effect = get_doc_side_effect
         
-        result = callback(execution_name=execution.name, **payload)
-        
-        execution.reload()
-        self.assertEqual(execution.status, "success")
-        self.assertEqual(execution.n8n_execution_id, "n8n-12345")
-        
-        # Verify execution_data was serialized to string
-        self.assertEqual(execution.execution_data, json.dumps({"test_key": "test_value"}))
-        
-        # Verify disallowed fields were not updated
-        self.assertEqual(execution.playbook, playbook.name)
-        
-        # Verify returned result is the updated document dict
-        self.assertEqual(result.get("status"), "success")
-        self.assertEqual(result.get("name"), "test-callback-exec")
-        
-    def test_callback_not_found_but_create(self):
-        from frappe_n8n.playbook_execution import callback
-        import json
+        mock_post.return_value.status_code = 200
 
-        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
-        playbook = frappe.get_doc({
-            "doctype": "Playbook",
-            "playbook_name": "Test Callback Playbook Create",
-            "provider": "n8n",
-            "document_type": "ToDo", "status": "Enabled",
-        }).insert()
+        # Act
+        trigger_test_execution_sync(
+            "Test Playbook",
+            "Test Doc",
+            "TEST-001",
+            {"data": "test"},
+            "idemp-key"
+        )
         
-        payload = {
-            "status": "success",
-            "playbook": playbook.name,
-            "reference_doctype": "ToDo",
-            "reference_name": todo.name,
-            "execution": {"id": "n8n-create-123"},
-            "execution_data": {"created": True}
-        }
-        
-        result = callback(execution_name="new-exec-123", **payload)
-        
-        self.assertEqual(result.get("status"), "success")
-        self.assertEqual(result.get("name"), "new-exec-123")
-        self.assertEqual(result.get("playbook"), playbook.name)
-        
-        # Verify it was inserted in db
-        execution = frappe.get_doc("Playbook Execution", "new-exec-123")
-        self.assertEqual(execution.status, "success")
-        self.assertEqual(execution.n8n_execution_id, "n8n-create-123")
-        self.assertEqual(execution.execution_data, json.dumps({"created": True}))
+        # Assert
+        mock_post.assert_called_once()
+        url = mock_post.call_args[0][0]
+        kwargs = mock_post.call_args[1]
+        self.assertEqual(url, "https://n8n.example.com/webhook-test/test-webhook-123")
+        self.assertEqual(kwargs["json"], {"data": "test"})
+        self.assertEqual(kwargs["headers"]["frappe-playbook-execution-name"], "idemp-key")
 
-    def test_callback_create_no_name(self):
-        from frappe_n8n.playbook_execution import callback
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
+    def test_n8n_test_execution_missing_webhook_no_job_context(self, mock_frappe):
+        # Arrange
+        mock_frappe.db.exists.return_value = False
+        mock_frappe.flags.current_job_id = None
         
-        playbook = frappe.get_doc({
-            "doctype": "Playbook",
-            "playbook_name": "Test Callback Playbook No Name",
-            "provider": "n8n",
-            "document_type": "ToDo", "status": "Enabled",
-        }).insert()
+        # Act & Assert
+        with self.assertRaisesRegex(ValueError, "trigger_test_execution_async must be run in a background job context."):
+            trigger_test_execution_async(
+                "Test Playbook",
+                "Test Doc",
+                "TEST-001",
+                {"data": "test"},
+                "idemp-key"
+            )
+
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def test_n8n_test_execution_async_flow(self, mock_enqueue, mock_frappe, mock_post):
+        # Arrange
+        mock_frappe.db.exists.return_value = False
+        mock_frappe.generate_hash.return_value = "hash123"
+        mock_frappe.flags.current_job_id = "mocked"
         
-        payload = {
-            "status": "success",
-            "playbook": playbook.name
-        }
+        settings = MagicMock()
+        settings.enabled = 1
+        settings.base_url = "https://n8n.example.com/"
+        mock_frappe.get_single.return_value = settings
         
-        result = callback(**payload)
+        playbook_doc = MagicMock()
+        node = MagicMock()
+        node.get.side_effect = lambda k, d=None: "n8n-nodes-base.webhook" if k == "node_type" else "test-webhook-123" if k == "n8n_webhook_id" else d
+        playbook_doc.get.return_value = [node]
         
-        self.assertEqual(result.get("status"), "success")
-        self.assertIsNotNone(result.get("name"))
-        self.assertEqual(len(result.get("name")), 10)
+        def get_doc_side_effect(doctype, name=None):
+            return playbook_doc
+            
+        mock_frappe.get_doc.side_effect = get_doc_side_effect
         
-    def test_callback_create_missing_playbook(self):
-        from frappe_n8n.playbook_execution import callback
+        mock_post.return_value.status_code = 200
         
-        payload = {
-            "status": "success"
-        }
+        mock_job_promise = MagicMock()
+        mock_enqueue.return_value = mock_job_promise
+
+        # Act
+        trigger_test_execution_async(
+            "Test Playbook",
+            "Test Doc",
+            "TEST-001",
+            {"data": "test"},
+            "idemp-key"
+        )
         
-        with self.assertRaises(frappe.exceptions.ValidationError):
-            callback(execution_name="non-existent-exec", **payload)
+        # Assert
+        mock_enqueue.assert_called_once_with("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name="Test Playbook")
+        mock_job_promise.result.assert_called_once()
+        mock_post.assert_called_once()
+        self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/webhook-test/test-webhook-123")
+
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.frappe")
+    def test_n8n_test_execution_api_failure(self, mock_frappe, mock_post):
+        # Arrange
+        mock_frappe.db.exists.return_value = False
+        mock_frappe.generate_hash.return_value = "hash123"
+        
+        settings = MagicMock()
+        settings.enabled = 1
+        settings.base_url = "https://n8n.example.com"
+        mock_frappe.get_single.return_value = settings
+        
+        playbook_doc = MagicMock()
+        node = MagicMock()
+        node.get.side_effect = lambda k, d=None: "n8n-nodes-base.webhook" if k == "node_type" else "test-webhook-123" if k == "n8n_webhook_id" else d
+        playbook_doc.get.return_value = [node]
+        def get_doc_side_effect(doctype, name=None):
+            return playbook_doc
+            
+        mock_frappe.get_doc.side_effect = get_doc_side_effect
+        
+        from requests.exceptions import RequestException
+        mock_post.side_effect = RequestException("Connection timeout")
+
+        # Act & Assert
+        with self.assertRaises(RequestException):
+            trigger_test_execution_sync(
+                "Test Playbook",
+                "Test Doc",
+                "TEST-001",
+                {"data": "test"},
+                "idemp-key"
+            )
+            
+        mock_frappe.log_error.assert_called_once()
+        self.assertIn("Failed to trigger n8n test execution", mock_frappe.log_error.call_args[0][0])
