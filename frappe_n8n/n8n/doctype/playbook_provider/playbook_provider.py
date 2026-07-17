@@ -134,16 +134,30 @@ class N8nPlaybookProvider(PlaybookProviderBase):
             as_child=as_child
         )
         
-    def queue_test_execution(self, playbook_doc, reference_doctype, reference_name, payload, execution_name, as_child=True):
+    def trigger_test_execution(self, playbook_doc, reference_doctype, reference_name, payload, execution_name):
+        for node in playbook_doc.get("nodes", []):
+            if node.get("node_type") == "n8n-nodes-base.webhook" and node.get("n8n_webhook_id"):
+                from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_test_execution_sync
+                trigger_test_execution_sync(
+                    playbook_name=playbook_doc.name,
+                    reference_doctype=reference_doctype,
+                    reference_name=reference_name,
+                    payload=payload,
+                    execution_name=execution_name
+                )
+                return {"status": "success", "message": "Test event sent."}
+        
+        # If webhook ID is missing, enqueue the async version
         enqueue(
-            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_test_execution",
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_test_execution_async",
+            queue="high",
             playbook_name=playbook_doc.name,
             reference_doctype=reference_doctype,
             reference_name=reference_name,
             payload=payload,
-            execution_name=execution_name,
-            as_child=as_child
+            execution_name=execution_name
         )
+        return {"status": "success", "message": "Test event queued."}
         
     def queue_resume_execution(self, execution_doc, response_body, callback_url, execution_name=None):
         payload = response_body or {}
@@ -292,7 +306,7 @@ def update_a_playbook(playbook_name):
     playbook_doc = frappe.get_doc("Playbook", playbook_name)
     
     # Status
-    playbook_doc.is_active = playbook_data.get("active", False)
+    playbook_doc.enabled = playbook_data.get("active", False)
     
     # Vue-Flow Elements (playbook_data)
     # Translate n8n nodes and connections into vue-flow nodes and edges
