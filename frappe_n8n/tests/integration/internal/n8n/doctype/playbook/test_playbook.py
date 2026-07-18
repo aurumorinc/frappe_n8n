@@ -9,6 +9,13 @@ class TestN8nPlaybook(IntegrationTestCase):
         frappe.db.rollback()
         super().tearDownClass()
 
+    def setUp(self):
+        super().setUp()
+
+    def tearDown(self):
+        frappe.db.rollback()
+        super().tearDown()
+
     @patch("requests.put")
     @patch("requests.post")
     def test_on_playbook_after_insert_creates_workflow(self, mock_post, mock_put):
