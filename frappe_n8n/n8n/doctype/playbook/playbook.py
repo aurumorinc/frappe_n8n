@@ -35,7 +35,7 @@ def trigger_test_execution(playbook_name):
                 break
                 
     if not target_doc:
-        return {"status": "failed", "message": "No matching document found."}
+        return {"status": "failed", "title": "No Document Found", "message": "No matching document found."}
         
     payload = target_doc.as_dict(convert_dates_to_str=True)
     execution_name = f"test-{playbook_doc.name}-{frappe.generate_hash(length=10)}"
@@ -45,22 +45,23 @@ def trigger_test_execution(playbook_name):
             from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_test_execution_sync
             import requests
             try:
-                success = trigger_test_execution_sync(
+                trigger_test_execution_sync(
                     playbook_name=playbook_doc.name,
                     reference_doctype=target_doc.doctype,
                     reference_name=target_doc.name,
                     payload=payload,
                     execution_name=execution_name
                 )
-                if success:
-                    return {"status": "success", "message": "Test event sent."}
-                return
-            except Exception as e:
+                return {"status": "success", "title": "Test Execution Sent", "message": "Test event sent."}
+            except requests.exceptions.RequestException as e:
                 msg = "Failed to send test event to n8n. Please ensure 'Listen for test events' is active in n8n."
-                if isinstance(e, requests.exceptions.RequestException) and e.response is not None:
+                if e.response is not None:
                     msg += f" (HTTP {e.response.status_code})"
-                frappe.msgprint(msg, title="Test Execution Failed", indicator="orange")
-                return
+                frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
+                return {"status": "failed", "title": "Test Execution Failed", "message": msg}
+            except Exception as e:
+                frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
+                return {"status": "failed", "title": "Error", "message": f"Failed to trigger n8n test execution: {str(e)}"}
     
     from frappe_controller.utils.background_jobs import enqueue
     enqueue(
@@ -72,7 +73,7 @@ def trigger_test_execution(playbook_name):
         payload=payload,
         execution_name=execution_name
     )
-    return {"status": "success", "message": "Test event queued."}
+    return {"status": "success", "title": "Test Execution Queued", "message": "Test event queued."}
 
 
 def create_workflow(playbook_doc):

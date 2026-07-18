@@ -102,21 +102,8 @@ def replay(execution_name):
     )
 
 def trigger_test_execution_sync(playbook_name, reference_doctype, reference_name, payload, execution_name):
-    import requests
-    try:
-        send_webhook(playbook_name, payload, execution_name, is_test=True)
-        return True
-    except requests.exceptions.RequestException as e:
-        frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
-        msg = "Failed to send test event to n8n. Please ensure 'Listen for test events' is active in n8n."
-        if e.response is not None:
-            msg += f" (HTTP {e.response.status_code})"
-        frappe.msgprint(msg, title="Test Execution Failed", indicator="orange")
-        return False
-    except Exception as e:
-        frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
-        frappe.msgprint(f"Failed to trigger n8n test execution: {e}", title="Error", indicator="red")
-        return False
+    send_webhook(playbook_name, payload, execution_name, is_test=True)
+    return True
 
 def trigger_test_execution_async(playbook_name, reference_doctype, reference_name, payload, execution_name):
     import requests

@@ -15,33 +15,39 @@ class TestN8NTestExecutionGracefulExit(IntegrationTestCase):
         }).insert()
         
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.send_webhook")
-    def test_trigger_test_execution_sync_handles_404(self, mock_send_webhook):
-        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_test_execution_sync
+    @patch("frappe.get_all")
+    @patch("frappe.get_doc")
+    def test_trigger_test_execution_graceful_failure(self, mock_get_doc, mock_get_all, mock_send_webhook):
+        from frappe_n8n.n8n.doctype.playbook.playbook import trigger_test_execution
         
         # Mocking 404 response
         response = MagicMock()
         response.status_code = 404
         mock_send_webhook.side_effect = requests.exceptions.HTTPError(response=response)
         
-        # We need to wrap it because send_webhook might raise inside trigger_test_execution_sync
-        # But wait, trigger_test_execution_sync already handles HTTPError if we raise it
-        # Actually in playbook_execution.py send_webhook calls requests.post(..).raise_for_status()
+        mock_get_all.return_value = [{"reference_doctype": "ToDo", "reference_name": "test-todo"}]
+        mock_get_doc.return_value = self.playbook
         
-        # Let's mock send_webhook to raise directly
-        mock_send_webhook.side_effect = requests.exceptions.HTTPError(response=response)
+        # Target doc
+        target_doc = MagicMock()
+        target_doc.doctype = "ToDo"
+        target_doc.name = "test-todo"
+        target_doc.as_dict.return_value = {}
         
-        with patch("frappe.msgprint") as mock_msgprint:
-            result = trigger_test_execution_sync(
-                playbook_name=self.playbook.name,
-                reference_doctype="ToDo",
-                reference_name="test-todo",
-                payload={},
-                execution_name="test-exec"
-            )
+        def custom_get_doc(doctype, name=None, *args, **kwargs):
+            if doctype == "Playbook":
+                return self.playbook
+            if doctype == "ToDo" and name == "test-todo":
+                return target_doc
+            return frappe.get_doc(doctype, name, *args, **kwargs)
             
-            self.assertFalse(result)
-            mock_msgprint.assert_called_once()
-            self.assertIn("orange", mock_msgprint.call_args[1].get("indicator", ""))
+        mock_get_doc.side_effect = custom_get_doc
+        
+        result = trigger_test_execution(self.playbook.name)
+        
+        self.assertEqual(result.get("status"), "failed")
+        self.assertEqual(result.get("title"), "Test Execution Failed")
+        self.assertIn("404", result.get("message", ""))
 
     def test_whitelisting_playbook_overrides(self):
         from frappe_n8n.n8n.doctype.playbook.playbook import get_builder_url, trigger_test_execution
