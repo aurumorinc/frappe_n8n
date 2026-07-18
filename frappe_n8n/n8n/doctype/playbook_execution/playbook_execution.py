@@ -102,13 +102,24 @@ def replay(execution_name):
     )
 
 def trigger_test_execution_sync(playbook_name, reference_doctype, reference_name, payload, execution_name):
+    import requests
     try:
         send_webhook(playbook_name, payload, execution_name, is_test=True)
+        return True
+    except requests.exceptions.RequestException as e:
+        frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
+        msg = "Failed to send test event to n8n. Please ensure 'Listen for test events' is active in n8n."
+        if e.response is not None:
+            msg += f" (HTTP {e.response.status_code})"
+        frappe.msgprint(msg, title="Test Execution Failed", indicator="orange")
+        return False
     except Exception as e:
         frappe.log_error(f"Failed to trigger n8n test execution: {e}", "n8n Execution Error")
-        raise
+        frappe.msgprint(f"Failed to trigger n8n test execution: {e}", title="Error", indicator="red")
+        return False
 
 def trigger_test_execution_async(playbook_name, reference_doctype, reference_name, payload, execution_name):
+    import requests
     if not getattr(frappe.flags, "current_job_id", None):
         raise ValueError("trigger_test_execution_async must be run in a background job context.")
         
@@ -125,12 +136,14 @@ def trigger_test_execution_async(playbook_name, reference_doctype, reference_nam
                 break
                 
         if not webhook_id:
-            raise ValueError(f"No webhook node found for Playbook {playbook_name} even after update.")
+            frappe.log_error(f"No webhook node found for Playbook {playbook_name} even after update.", "n8n Execution Error")
+            return
             
         send_webhook(playbook_name, payload, execution_name, is_test=True, webhook_id=webhook_id)
+    except requests.exceptions.RequestException as e:
+        frappe.log_error(f"Failed to trigger async n8n test execution (User may not have 'Listen for test events' active): {e}", "n8n Execution Error")
     except Exception as e:
         frappe.log_error(f"Failed to trigger async n8n test execution: {e}", "n8n Execution Error")
-        raise
 
 def resume_execution(url, payload, execution_id=None):
     try:

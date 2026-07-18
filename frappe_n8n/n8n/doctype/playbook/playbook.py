@@ -1,10 +1,12 @@
 import frappe
 
+@frappe.whitelist()
 def get_builder_url(playbook_name):
     playbook_doc = frappe.get_doc("Playbook", playbook_name)
     settings = frappe.get_single("n8n Settings")
     return f"{settings.base_url.rstrip('/')}/workflow/{playbook_doc.n8n_workflow_id}"
 
+@frappe.whitelist()
 def trigger_test_execution(playbook_name):
     playbook_doc = frappe.get_doc("Playbook", playbook_name)
     
@@ -41,14 +43,24 @@ def trigger_test_execution(playbook_name):
     for node in playbook_doc.get("nodes", []):
         if node.get("node_type") == "n8n-nodes-base.webhook" and node.get("n8n_webhook_id"):
             from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_test_execution_sync
-            trigger_test_execution_sync(
-                playbook_name=playbook_doc.name,
-                reference_doctype=target_doc.doctype,
-                reference_name=target_doc.name,
-                payload=payload,
-                execution_name=execution_name
-            )
-            return {"status": "success", "message": "Test event sent."}
+            import requests
+            try:
+                success = trigger_test_execution_sync(
+                    playbook_name=playbook_doc.name,
+                    reference_doctype=target_doc.doctype,
+                    reference_name=target_doc.name,
+                    payload=payload,
+                    execution_name=execution_name
+                )
+                if success:
+                    return {"status": "success", "message": "Test event sent."}
+                return
+            except Exception as e:
+                msg = "Failed to send test event to n8n. Please ensure 'Listen for test events' is active in n8n."
+                if isinstance(e, requests.exceptions.RequestException) and e.response is not None:
+                    msg += f" (HTTP {e.response.status_code})"
+                frappe.msgprint(msg, title="Test Execution Failed", indicator="orange")
+                return
     
     from frappe_controller.utils.background_jobs import enqueue
     enqueue(
