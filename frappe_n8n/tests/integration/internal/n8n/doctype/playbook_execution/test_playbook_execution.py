@@ -345,3 +345,348 @@ class TestN8nTestExecutionUnit(IntegrationTestCase):
 
         mock_post.assert_called_once()
         self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/api/v1/executions/exec-123/stop")
+import json
+
+from unittest.mock import patch
+
+class TestCallbackEndpoint(IntegrationTestCase):
+    def setUp(self):
+        super().setUp()
+        self.patcher = patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
+        self.mock_create_workflow = self.patcher.start()
+        
+        self.patcher2 = patch("frappe_n8n.n8n.doctype.playbook.playbook.toggle_workflow_status")
+        self.mock_toggle = self.patcher2.start()
+
+        self.patcher3 = patch("frappe_n8n.n8n.doctype.playbook.playbook.on_trash")
+        self.mock_trash = self.patcher3.start()
+
+        if not frappe.db.exists("Playbook Provider", "n8n"):
+            frappe.get_doc({
+                "doctype": "Playbook Provider",
+                "provider_name": "n8n",
+                "enabled": 1
+            }).insert(ignore_permissions=True)
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.patcher2.stop()
+        self.patcher3.stop()
+        frappe.db.rollback()
+        super().tearDown()
+
+    def test_callback_success(self):
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Callback Playbook",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
+        
+        execution = frappe.get_doc({
+            "doctype": "Playbook Execution",
+            "name": "live-callback-exec",
+            "playbook": playbook.name,
+            "reference_doctype": "ToDo",
+            "reference_name": todo.name,
+            "status": "running"
+        }).insert(ignore_permissions=True, ignore_links=True)
+        
+        from frappe_n8n.playbook_execution import callback
+        
+        payload = {
+            "status": "success",
+            "execution": {"id": "n8n-12345"},
+            "execution_data": {"test_key": "test_value"},
+            "playbook": "Should Not Update",
+            "unknown_field": "Should be ignored"
+        }
+        
+        result = callback(execution_name=execution.name, **payload)
+        
+        execution.reload()
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.n8n_execution_id, "n8n-12345")
+        
+        # Verify execution_data was serialized to string
+        self.assertEqual(execution.execution_data, json.dumps({"test_key": "test_value"}))
+        
+        # Verify disallowed fields were not updated
+        self.assertEqual(execution.playbook, playbook.name)
+        
+        # Verify returned result is the updated document dict
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("name"), "live-callback-exec")
+        
+    def test_callback_not_found_but_create(self):
+        from frappe_n8n.playbook_execution import callback
+
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Callback Playbook Create",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
+        
+        payload = {
+            "status": "success",
+            "playbook": playbook.name,
+            "reference_doctype": "ToDo",
+            "reference_name": todo.name,
+            "execution": {"id": "n8n-create-123"},
+            "execution_data": {"created": True}
+        }
+        
+        result = callback(execution_name="new-exec-123", **payload)
+        
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("name"), "new-exec-123")
+        self.assertEqual(result.get("playbook"), playbook.name)
+        
+        # Verify it was inserted in db
+        execution = frappe.get_doc("Playbook Execution", "new-exec-123")
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.n8n_execution_id, "n8n-create-123")
+        self.assertEqual(execution.execution_data, json.dumps({"created": True}))
+
+    def test_callback_create_no_name(self):
+        from frappe_n8n.playbook_execution import callback
+        
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Callback Playbook No Name",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
+        
+        payload = {
+            "status": "success",
+            "playbook": playbook.name
+        }
+        
+        result = callback(**payload)
+        
+        self.assertEqual(result.get("status"), "success")
+        self.assertIsNotNone(result.get("name"))
+        self.assertEqual(len(result.get("name")), 10)
+        
+    def test_callback_create_missing_playbook(self):
+        from frappe_n8n.playbook_execution import callback
+        
+        payload = {
+            "status": "success"
+        }
+        
+        with self.assertRaises(frappe.exceptions.ValidationError):
+            callback(execution_name="non-existent-exec", **payload)
+
+    def test_callback_test_execution_no_db_save(self):
+        from frappe_n8n.playbook_execution import callback
+        
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Transient Callback",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
+
+        payload = {
+            "name": "test-playbookname-12345",
+            "playbook": playbook.name,
+            "status": "success",
+            "execution_data": {"result": "ok"}
+        }
+
+        result = callback(**payload)
+
+        # Assert returned result is formatted correctly
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("execution_data"), json.dumps({"result": "ok"}))
+        self.assertEqual(result.get("name"), "test-playbookname-12345")
+
+        # Assert not in DB
+        self.assertFalse(frappe.db.exists("Playbook Execution", "test-playbookname-12345"))
+
+    def test_callback_test_execution_validation_failure(self):
+        from frappe_n8n.playbook_execution import callback
+        
+        # Missing mandatory playbook field
+        payload = {
+            "name": "test-playbookname-invalid",
+            "status": "success",
+            "execution_data": {"result": "ok"}
+        }
+
+        # Assert validations are correctly invoked even for transient docs
+        with self.assertRaises(frappe.exceptions.MandatoryError):
+            callback(**payload)
+            
+        # Assert not in DB
+        self.assertFalse(frappe.db.exists("Playbook Execution", "test-playbookname-invalid"))
+
+    def test_callback_error_status(self):
+        from frappe_n8n.playbook_execution import callback
+
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Callback Playbook Error",
+            "provider": "n8n",
+            "document_type": "ToDo", "status": "Enabled",
+        }).insert()
+        
+        payload = {
+            "status": "error",
+            "playbook": playbook.name,
+            "reference_doctype": "ToDo",
+            "reference_name": todo.name,
+            "execution_data": {"error": "Something went wrong"}
+        }
+        
+        result = callback(execution_name="error-exec-123", **payload)
+        
+        self.assertEqual(result.get("status"), "error")
+        self.assertEqual(result.get("execution_data"), json.dumps({"error": "Something went wrong"}))
+        
+        execution = frappe.get_doc("Playbook Execution", "error-exec-123")
+        self.assertEqual(execution.status, "error")
+        self.assertEqual(execution.execution_data, json.dumps({"error": "Something went wrong"}))
+from unittest.mock import patch
+
+class TestN8nPlaybookTestLifecycle(IntegrationTestCase):
+    @classmethod
+    def tearDownClass(cls):
+        frappe.db.rollback()
+        super().tearDownClass()
+
+    def setUp(self):
+        super().setUp()
+
+    def tearDown(self):
+        frappe.db.rollback()
+        super().tearDown()
+
+    @patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
+    def test_sync_lifecycle(self, mock_exec_post, mock_create_workflow):
+        mock_exec_post.return_value.status_code = 200
+        
+        settings = frappe.get_doc("n8n Settings")
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("webhook_security", "test_token")
+        
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Sync Lifecycle",
+            "provider": "n8n",
+            "document_type": "ToDo", 
+            "status": "Enabled",
+            "nodes": [
+                {
+                    "node_name": "Webhook",
+                    "node_type": "n8n-nodes-base.webhook",
+                    "n8n_webhook_id": "wh-sync-123"
+                }
+            ]
+        }).insert()
+        
+        from frappe_n8n.n8n.doctype.playbook.playbook import trigger_test_execution
+        
+        result = trigger_test_execution(playbook.name)
+        
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["message"], "Test event sent.")
+        
+        self.assertEqual(mock_exec_post.call_count, 1)
+        self.assertEqual(mock_exec_post.call_args[0][0], "https://n8n.example.com/webhook-test/wh-sync-123")
+        self.assertEqual(mock_exec_post.call_args[1]["json"]["name"], todo.name)
+
+    @patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
+    @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def test_async_lifecycle(self, mock_enqueue, mock_post, mock_create_workflow):
+        mock_post.return_value.status_code = 200
+        
+        settings = frappe.get_doc("n8n Settings")
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com/")
+        settings.db_set("webhook_security", "test_token")
+        
+        todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
+        
+        playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Async Lifecycle",
+            "provider": "n8n",
+            "document_type": "ToDo", 
+            "status": "Enabled",
+            "nodes": [
+                {
+                    "node_name": "Manual",
+                    "node_type": "n8n-nodes-base.manualTrigger"
+                }
+            ]
+        }).insert()
+        
+        from frappe_n8n.n8n.doctype.playbook.playbook import trigger_test_execution
+        
+        # Act 1: Initial trigger (will route to async)
+        with patch("frappe_controller.utils.background_jobs.enqueue") as mock_provider_enqueue:
+            result = trigger_test_execution(playbook.name)
+            
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["message"], "Test event queued.")
+            self.assertEqual(mock_provider_enqueue.call_count, 1)
+            
+            # Get the exact payload that was enqueued
+            enqueue_kwargs = mock_provider_enqueue.call_args[1]
+            playbook_name = enqueue_kwargs["playbook_name"]
+            reference_doctype = enqueue_kwargs["reference_doctype"]
+            reference_name = enqueue_kwargs["reference_name"]
+            payload = enqueue_kwargs["payload"]
+            execution_name = enqueue_kwargs["execution_name"]
+
+        # Act 2: Simulate the background job being processed
+        # Before we run the async function, we simulate that the update job "succeeded"
+        # by updating the playbook to have a webhook ID, which is what would happen in reality.
+        def mock_enqueue_side_effect(*args, **kwargs):
+            class MockJobPromise:
+                def result(self):
+                    pb = frappe.get_doc("Playbook", playbook_name)
+                    pb.set("nodes", [
+                        {
+                            "node_name": "Webhook",
+                            "node_type": "n8n-nodes-base.webhook",
+                            "n8n_webhook_id": "wh-async-123"
+                        }
+                    ])
+                    pb.save()
+            return MockJobPromise()
+            
+        mock_enqueue.side_effect = mock_enqueue_side_effect
+        
+        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_test_execution_async
+        
+        # Simulate being in a background job
+        frappe.flags.current_job_id = "test-job-id"
+        try:
+            trigger_test_execution_async(
+                playbook_name=playbook_name,
+                reference_doctype=reference_doctype,
+                reference_name=reference_name,
+                payload=payload,
+                execution_name=execution_name
+            )
+        finally:
+            frappe.flags.current_job_id = None
+            
+        # Assertions for the async part
+        mock_enqueue.assert_called_once_with("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name=playbook.name)
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/webhook-test/wh-async-123")
+        self.assertEqual(mock_post.call_args[1]["json"]["name"], todo.name)
