@@ -2,7 +2,34 @@ import frappe
 from frappe.tests import IntegrationTestCase
 import json
 
+from unittest.mock import patch
+
 class TestCallbackEndpoint(IntegrationTestCase):
+    def setUp(self):
+        super().setUp()
+        self.patcher = patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
+        self.mock_create_workflow = self.patcher.start()
+        
+        self.patcher2 = patch("frappe_n8n.n8n.doctype.playbook.playbook.toggle_workflow_status")
+        self.mock_toggle = self.patcher2.start()
+
+        self.patcher3 = patch("frappe_n8n.n8n.doctype.playbook.playbook.on_trash")
+        self.mock_trash = self.patcher3.start()
+
+        if not frappe.db.exists("Playbook Provider", "n8n"):
+            frappe.get_doc({
+                "doctype": "Playbook Provider",
+                "provider_name": "n8n",
+                "enabled": 1
+            }).insert(ignore_permissions=True)
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.patcher2.stop()
+        self.patcher3.stop()
+        frappe.db.rollback()
+        super().tearDown()
+
     def test_callback_success(self):
         todo = frappe.get_doc({"doctype": "ToDo", "description": "test"}).insert()
         playbook = frappe.get_doc({
