@@ -190,8 +190,7 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
     @patch("frappe_controller.utils.controller.emit_event")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.get")
     @patch("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.requests.patch")
-    @patch("frappe_controller.utils.background_jobs.enqueue")
-    def test_queue_rotate_credentials(self, mock_enqueue, mock_patch, mock_get, mock_emit):
+    def test_rotate_credentials(self, mock_patch, mock_get, mock_emit):
         mock_get.return_value.status_code = 200
         mock_patch.return_value.status_code = 200
         
@@ -203,8 +202,22 @@ class IntegrationTestn8nSettings(IntegrationTestCase):
         settings.webhook_security = "test_webhook_token"
         settings.save()
         
-        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import queue_rotate_credentials
-        queue_rotate_credentials()
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import rotate_credentials
+        rotate_credentials()
         
         mock_patch.assert_called_once()
         mock_emit.assert_any_call(key="n8n_credential_ready", argument={"status": "success"})
+
+    @patch("frappe_controller.utils.background_jobs.enqueue")
+    def test_enqueue_rotate_credentials(self, mock_enqueue):
+        settings = frappe.get_single("n8n Settings")
+        settings.db_set("enabled", 1)
+        settings.db_set("base_url", "https://n8n.example.com")
+        settings.db_set("api_key", "test_api_key")
+        settings.db_set("webhook_credential_id", "test_cred_id")
+        settings.db_set("webhook_security", "test_webhook_token")
+        
+        from frappe_n8n.n8n.doctype.n8n_settings.n8n_settings import enqueue_rotate_credentials
+        enqueue_rotate_credentials()
+        
+        mock_enqueue.assert_called_once_with("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.rotate_credentials")
