@@ -35,46 +35,69 @@ def send_webhook(playbook_name, payload, execution_name, is_test=False, webhook_
 
 def after_insert(doc, method=None):
     if doc.status == "queued":
-        # Check if playbook uses n8n
         playbook = frappe.db.get_value("Playbook", doc.playbook, "provider")
         if playbook == "n8n":
-            import json
-            payload = json.loads(doc.execution_data) if doc.execution_data else {}
-            try:
-                send_webhook(doc.playbook, payload, doc.name, is_test=False)
-                doc.db_set("status", "running")
-            except Exception as e:
-                frappe.log_error(f"Failed to trigger n8n execution via hook: {e}", "n8n Execution Error")
-                doc.db_set("status", "error")
+            frappe.enqueue(
+                "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+                execution_name=doc.name,
+                queue="high"
+            )
+
+def trigger_execution(execution_name):
+    doc = frappe.get_doc("Playbook Execution", execution_name)
+    if doc.status != "queued":
+        return
+
+    import json
+    payload = json.loads(doc.execution_data) if doc.execution_data else {}
+    try:
+        send_webhook(doc.playbook, payload, doc.name, is_test=False)
+        doc.status = "running"
+        doc.save(ignore_permissions=True)
+    except Exception as e:
+        frappe.log_error(f"Failed to trigger n8n execution: {e}", "n8n Execution Error")
+        # Ensure valid status transition paths (queued -> running -> error)
+        doc.status = "running"
+        doc.save(ignore_permissions=True)
+        doc.status = "error"
+        doc.save(ignore_permissions=True)
+        raise
 
 def on_update(doc, method=None):
     if doc.has_value_changed("status") and doc.status == "canceled":
         playbook = frappe.db.get_value("Playbook", doc.playbook, "provider")
-        if playbook == "n8n":
-            stop_execution(doc)
+        if playbook == "n8n" and doc.n8n_execution_id:
+            frappe.enqueue(
+                "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.stop_execution",
+                n8n_execution_id=doc.n8n_execution_id,
+                queue="high"
+            )
 
-def stop_execution(execution_doc):
+def stop_execution(n8n_execution_id):
     settings = frappe.get_single("n8n Settings")
     if not settings.enabled or not settings.base_url or not settings.api_key:
-        frappe.throw("n8n integration is not enabled or missing credentials.")
-        
-    if not execution_doc.get("n8n_execution_id"):
         return
 
-    url = f"{settings.base_url.rstrip('/')}/api/v1/executions/{execution_doc.n8n_execution_id}/stop"
+    url = f"{settings.base_url.rstrip('/')}/api/v1/executions/{n8n_execution_id}/stop"
     api_key = settings.get_password("api_key") or settings.api_key
     headers = {
         "X-N8N-API-KEY": api_key,
         "Accept": "application/json"
     }
-    
+
     try:
         response = requests.post(url, headers=headers, timeout=10)
         response.raise_for_status()
         return response.json()
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            frappe.log_error("Execution already stopped or not found in n8n (404).", "n8n Integration Error")
+            return
+        frappe.log_error(f"Failed to stop n8n execution: {str(e)}", "n8n Integration Error")
+        raise
     except requests.exceptions.RequestException as e:
         frappe.log_error(f"Failed to stop n8n execution: {str(e)}", "n8n Integration Error")
-        frappe.throw(f"Failed to stop execution in n8n. Error: {str(e)}")
+        raise
 
 def get_debug_url(execution_name):
     doc = frappe.get_doc("Playbook Execution", execution_name)
