@@ -258,7 +258,8 @@ class TestN8nTestExecutionUnit(IntegrationTestCase):
 
     @patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
-    def test_after_insert_hook_triggers_webhook(self, mock_post, mock_create_workflow):
+    @patch("frappe.enqueue")
+    def test_after_insert_hook_triggers_webhook(self, mock_enqueue, mock_post, mock_create_workflow):
         mock_post.return_value.status_code = 200
 
         settings = frappe.get_doc("n8n Settings")
@@ -292,6 +293,18 @@ class TestN8nTestExecutionUnit(IntegrationTestCase):
             "execution_data": '{"test": "data"}'
         }).insert(ignore_permissions=True, ignore_links=True)
 
+        # Assert that trigger_execution was enqueued
+        mock_enqueue.assert_any_call(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            execution_name=execution.name,
+            queue="high"
+        )
+
+        # Simulate executing the background trigger
+        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import trigger_execution
+        trigger_execution(execution.name)
+
+        execution.reload()
         self.assertEqual(execution.status, "running")
         mock_post.assert_called_once()
         self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/webhook/wh-insert-123")
@@ -308,11 +321,17 @@ class TestN8nTestExecutionUnit(IntegrationTestCase):
             "execution_data": '{"test": "data"}'
         }).insert(ignore_permissions=True, ignore_links=True)
         
+        # Simulate executing the background trigger with error
+        with self.assertRaises(RequestException):
+            trigger_execution(execution2.name)
+
+        execution2.reload()
         self.assertEqual(execution2.status, "error")
 
     @patch("frappe_n8n.n8n.doctype.playbook.playbook.create_workflow", return_value="wf-mock-123")
     @patch("frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.requests.post")
-    def test_on_update_hook_stops_execution(self, mock_post, mock_create_workflow):
+    @patch("frappe.enqueue")
+    def test_on_update_hook_stops_execution(self, mock_enqueue, mock_post, mock_create_workflow):
         mock_post.return_value.status_code = 200
 
         settings = frappe.get_doc("n8n Settings")
@@ -342,6 +361,17 @@ class TestN8nTestExecutionUnit(IntegrationTestCase):
 
         execution.status = "canceled"
         execution.save(ignore_permissions=True)
+
+        # Assert stop_execution was enqueued
+        mock_enqueue.assert_any_call(
+            "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.stop_execution",
+            n8n_execution_id="exec-123",
+            queue="high"
+        )
+
+        # Simulate executing background stop
+        from frappe_n8n.n8n.doctype.playbook_execution.playbook_execution import stop_execution
+        stop_execution("exec-123")
 
         mock_post.assert_called_once()
         self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/api/v1/executions/exec-123/stop")
@@ -686,7 +716,7 @@ class TestN8nPlaybookTestLifecycle(IntegrationTestCase):
             frappe.flags.current_job_id = None
             
         # Assertions for the async part
-        mock_enqueue.assert_called_once_with("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name=playbook.name)
+        mock_enqueue.assert_any_call("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name=playbook.name)
         self.assertEqual(mock_post.call_count, 1)
         self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/webhook-test/wh-async-123")
         self.assertEqual(mock_post.call_args[1]["json"]["name"], todo.name)
