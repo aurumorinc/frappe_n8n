@@ -76,15 +76,28 @@ def trigger_test_execution(playbook_name):
     return {"status": "success", "title": "Test Execution Queued", "message": "Test event queued."}
 
 
-def create_workflow(playbook_doc):
+def enqueue_create_workflow(playbook_name):
+    frappe.enqueue(
+        "frappe_n8n.n8n.doctype.playbook.playbook.create_workflow",
+        playbook_name=playbook_name,
+        queue="low"
+    )
+
+
+def create_workflow(playbook_name):
     import requests
     import json
-    from frappe_controller.utils.controller import emit_event
-    
+    from frappe_controller.utils.controller import emit_event, wait_for_event
+
+    playbook_doc = frappe.get_doc("Playbook", playbook_name)
+    if playbook_doc.n8n_workflow_id:
+        return playbook_doc.n8n_workflow_id
+
     settings = frappe.get_single("n8n Settings")
     if not settings.enabled or not settings.base_url or not settings.api_key:
-        frappe.throw("n8n integration is not enabled or missing credentials.")
-        
+        wait_for_event("doc:n8n Settings:on_update")
+        return
+
     url = f"{settings.base_url.rstrip('/')}/api/v1/workflows"
     api_key = settings.get_password("api_key") or settings.api_key
     headers = {
@@ -92,33 +105,33 @@ def create_workflow(playbook_doc):
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
-    
+
     payload = {
         "name": playbook_doc.playbook_name,
         "nodes": [],
         "connections": {},
         "settings": {}
     }
-    
+
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
         workflow_id = data.get("id")
-        
+
         # Transfer to project if specified
         if settings.project_id:
             transfer_url = f"{url}/{workflow_id}/transfer"
             transfer_payload = {"destinationProjectId": settings.project_id}
             requests.put(transfer_url, headers=headers, json=transfer_payload, timeout=10)
-            
+
         # Populate nodes immediately
         vue_flow_data = {
             "nodes": data.get("nodes", []),
             "connections": data.get("connections", {})
         }
         playbook_doc.db_set('playbook_data', json.dumps(vue_flow_data))
-        
+
         playbook_doc.set("nodes", [])
         for node in data.get("nodes", []):
             playbook_doc.append("nodes", {
@@ -130,30 +143,37 @@ def create_workflow(playbook_doc):
                 "n8n_node_id": node.get("id"),
                 "n8n_webhook_id": node.get("webhookId", "")
             })
-            
+
         # Instead of generic save that might trigger recursive updates, update the DB directly
         for child in playbook_doc.get("nodes"):
             child.db_insert()
-        
+
+        playbook_doc.db_set("n8n_workflow_id", workflow_id)
+
         emit_event(key="n8n_workflow_created", argument={"playbook_name": playbook_doc.name})
-            
+
+        if playbook_doc.enabled:
+            toggle_workflow_status(playbook_doc.name, True)
+
         return workflow_id
     except requests.exceptions.RequestException as e:
         error_details = str(e)
         if hasattr(e, 'response') and e.response is not None:
             error_details += f" - Details: {e.response.text}"
         frappe.log_error(f"Failed to create n8n workflow: {error_details}", "n8n Integration Error")
-        frappe.throw(f"Failed to create workflow in n8n. Error: {error_details}")
+        raise
 
-def toggle_workflow_status(playbook_doc, is_active: bool):
+
+def toggle_workflow_status(playbook_name, is_active: bool):
     import requests
+    playbook_doc = frappe.get_doc("Playbook", playbook_name)
+    if not playbook_doc.n8n_workflow_id:
+        return
+
     settings = frappe.get_single("n8n Settings")
     if not settings.enabled or not settings.base_url or not settings.api_key:
         return
-        
-    if not playbook_doc.n8n_workflow_id:
-        return
-        
+
     action = "activate" if is_active else "deactivate"
     url = f"{settings.base_url.rstrip('/')}/api/v1/workflows/{playbook_doc.n8n_workflow_id}/{action}"
     api_key = settings.get_password("api_key") or settings.api_key
@@ -162,34 +182,56 @@ def toggle_workflow_status(playbook_doc, is_active: bool):
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
-    
+
     try:
         response = requests.post(url, headers=headers, timeout=10)
         response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            frappe.log_error(f"Workflow {playbook_doc.n8n_workflow_id} already deleted or not found in n8n (404) on status toggle", "n8n Integration Error")
+            return
+        frappe.log_error(f"Failed to {action} n8n workflow: {str(e)}", "n8n Integration Error")
+        raise
     except requests.exceptions.RequestException as e:
         frappe.log_error(f"Failed to {action} n8n workflow: {str(e)}", "n8n Integration Error")
-        frappe.throw(f"Failed to {action} workflow in n8n. Error: {str(e)}")
+        raise
+
 
 def on_update(doc, method=None):
     if doc.provider != "n8n":
         return
     if not doc.n8n_workflow_id:
-        workflow_id = create_workflow(doc)
-        if workflow_id:
-            doc.db_set("n8n_workflow_id", workflow_id)
-    
-    if doc.has_value_changed("enabled"):
-        toggle_workflow_status(doc, bool(doc.enabled))
+        enqueue_create_workflow(doc.name)
+    elif doc.has_value_changed("enabled"):
+        frappe.enqueue(
+            "frappe_n8n.n8n.doctype.playbook.playbook.toggle_workflow_status",
+            playbook_name=doc.name,
+            is_active=bool(doc.enabled),
+            queue="low"
+        )
+
 
 def on_trash(doc, method=None):
     if doc.provider != "n8n" or not doc.n8n_workflow_id:
         return
+    settings = frappe.get_single("n8n Settings")
+    if not settings.enabled:
+        return
+
+    frappe.enqueue(
+        "frappe_n8n.n8n.doctype.playbook.playbook.delete_workflow",
+        workflow_id=doc.n8n_workflow_id,
+        queue="low"
+    )
+
+
+def delete_workflow(workflow_id):
     import requests
     settings = frappe.get_single("n8n Settings")
     if not settings.enabled or not settings.base_url or not settings.api_key:
         return
 
-    url = f"{settings.base_url.rstrip('/')}/api/v1/workflows/{doc.n8n_workflow_id}"
+    url = f"{settings.base_url.rstrip('/')}/api/v1/workflows/{workflow_id}"
     api_key = settings.get_password("api_key") or settings.api_key
     headers = {
         "X-N8N-API-KEY": api_key,
@@ -199,6 +241,12 @@ def on_trash(doc, method=None):
     try:
         response = requests.delete(url, headers=headers, timeout=10)
         response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            frappe.log_error("Workflow already deleted in n8n (404).", "n8n Integration Error")
+            return
+        frappe.log_error(f"Failed to delete n8n workflow: {str(e)}", "n8n Integration Error")
+        raise
     except requests.exceptions.RequestException as e:
         frappe.log_error(f"Failed to delete n8n workflow: {str(e)}", "n8n Integration Error")
-        frappe.throw(f"Failed to delete workflow in n8n. Error: {str(e)}")
+        raise

@@ -18,7 +18,8 @@ class TestN8nPlaybook(IntegrationTestCase):
 
     @patch("requests.put")
     @patch("requests.post")
-    def test_on_playbook_after_insert_creates_workflow(self, mock_post, mock_put):
+    @patch("frappe.enqueue")
+    def test_on_playbook_after_insert_creates_workflow(self, mock_enqueue, mock_post, mock_put):
         mock_post.return_value.status_code = 200
         mock_put.return_value.status_code = 200
         mock_post.return_value.json.return_value = {
@@ -42,8 +43,19 @@ class TestN8nPlaybook(IntegrationTestCase):
             "status": "Enabled"
         }).insert()
         
+        # Verify that creation was enqueued asynchronously
+        mock_enqueue.assert_called_with(
+            "frappe_n8n.n8n.doctype.playbook.playbook.create_workflow",
+            playbook_name=playbook.name,
+            queue="low"
+        )
+
+        # Now simulate the background job executing
+        from frappe_n8n.n8n.doctype.playbook.playbook import create_workflow
+        create_workflow(playbook.name)
+
         self.assertTrue(mock_post.called)
-        self.assertEqual(mock_post.call_args[0][0], "https://n8n.example.com/api/v1/workflows")
+        self.assertEqual(mock_post.call_args_list[0][0][0], "https://n8n.example.com/api/v1/workflows")
         
         playbook.reload()
         self.assertEqual(playbook.n8n_workflow_id, "wf-12345")
@@ -160,3 +172,133 @@ class TestN8NTestExecutionGracefulExit(IntegrationTestCase):
         else:
             self.assertTrue(get_builder_url_whitelisted)
             self.assertTrue(trigger_test_execution_whitelisted)
+
+
+class TestN8NDecoupledPlaybookOperations(IntegrationTestCase):
+    def setUp(self):
+        super().setUp()
+        self.settings = frappe.get_doc("n8n Settings")
+        self.settings.db_set("enabled", 1)
+        self.settings.db_set("base_url", "https://n8n.example.com")
+        self.settings.db_set("api_key", "test_api_key")
+        frappe.db.commit()
+
+        # Let's clean up any existing Playbook with the name "Test Decoupled Playbook"
+        if frappe.db.exists("Playbook", "Test Decoupled Playbook"):
+            frappe.delete_doc("Playbook", "Test Decoupled Playbook")
+
+        self.playbook = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Test Decoupled Playbook",
+            "provider": "n8n",
+            "document_type": "ToDo",
+            "status": "Enabled",
+            "n8n_workflow_id": "wf-test-123"
+        }).insert(ignore_permissions=True)
+
+    def tearDown(self):
+        # Strict rollback to ensure absolutely no orphaned records are left in database
+        frappe.db.rollback()
+        super().tearDown()
+
+    @patch("frappe.enqueue")
+    def test_on_trash_enqueues_deletion(self, mock_enqueue):
+        # Act
+        self.playbook.delete()
+
+        # Assert
+        mock_enqueue.assert_any_call(
+            "frappe_n8n.n8n.doctype.playbook.playbook.delete_workflow",
+            workflow_id="wf-test-123",
+            queue="low"
+        )
+
+    @patch("requests.delete")
+    def test_delete_workflow_success(self, mock_delete):
+        mock_delete.return_value.status_code = 200
+        from frappe_n8n.n8n.doctype.playbook.playbook import delete_workflow
+
+        # Act
+        delete_workflow("wf-test-123")
+
+        # Assert
+        mock_delete.assert_called_once_with(
+            "https://n8n.example.com/api/v1/workflows/wf-test-123",
+            headers={"X-N8N-API-KEY": "test_api_key", "Accept": "application/json"},
+            timeout=10
+        )
+
+    @patch("requests.delete")
+    @patch("frappe.log_error")
+    def test_delete_workflow_404_graceful(self, mock_log, mock_delete):
+        from unittest.mock import MagicMock
+        import requests
+        # Mocking 404 error
+        response = MagicMock()
+        response.status_code = 404
+        mock_delete.side_effect = requests.exceptions.HTTPError(response=response)
+        
+        from frappe_n8n.n8n.doctype.playbook.playbook import delete_workflow
+
+        # Act
+        delete_workflow("wf-test-123")
+
+        # Assert (Verify it logs gracefully and does not throw)
+        mock_log.assert_called_once()
+        self.assertIn("Workflow already deleted", mock_log.call_args[0][0])
+
+    @patch("requests.delete")
+    def test_delete_workflow_other_errors_re_raise(self, mock_delete):
+        from unittest.mock import MagicMock
+        import requests
+        response = MagicMock()
+        response.status_code = 500
+        mock_delete.side_effect = requests.exceptions.HTTPError(response=response)
+        
+        from frappe_n8n.n8n.doctype.playbook.playbook import delete_workflow
+
+        # Act & Assert
+        with self.assertRaises(requests.exceptions.HTTPError):
+            delete_workflow("wf-test-123")
+
+    @patch("frappe.enqueue")
+    def test_on_update_enqueues_creation(self, mock_enqueue):
+        # Setup dummy playbook with no ID
+        new_pb = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "New Decoupled Playbook",
+            "provider": "n8n",
+            "document_type": "ToDo",
+            "status": "Enabled"
+        }).insert(ignore_permissions=True)
+
+        # Assert that create_workflow was enqueued
+        mock_enqueue.assert_any_call(
+            "frappe_n8n.n8n.doctype.playbook.playbook.create_workflow",
+            playbook_name=new_pb.name,
+            queue="low"
+        )
+
+    @patch("frappe_controller.utils.controller.wait_for_event")
+    def test_create_workflow_suspends_when_settings_disabled(self, mock_wait):
+        from frappe_controller.utils.controller import SuspendJob
+        # Set settings enabled to 0
+        self.settings.db_set("enabled", 0)
+        frappe.db.commit()
+
+        new_pb = frappe.get_doc({
+            "doctype": "Playbook",
+            "playbook_name": "Suspended Playbook",
+            "provider": "n8n",
+            "document_type": "ToDo",
+            "status": "Enabled"
+        }).insert(ignore_permissions=True)
+
+        mock_wait.side_effect = SuspendJob("doc:n8n Settings:on_update")
+        from frappe_n8n.n8n.doctype.playbook.playbook import create_workflow
+
+        # Act & Assert
+        with self.assertRaises(SuspendJob):
+            create_workflow(new_pb.name)
+
+        mock_wait.assert_called_once_with("doc:n8n Settings:on_update")
