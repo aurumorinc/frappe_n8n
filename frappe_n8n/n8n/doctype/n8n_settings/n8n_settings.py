@@ -156,7 +156,7 @@ def update_webhook_credential():
 
 	emit_event(key="n8n_credential_ready", argument={"status": "success"})
 
-def queue_rotate_credentials():
+def rotate_credentials():
 	from frappe_controller.utils.controller import emit_event
 	settings = frappe.get_single("n8n Settings")
 	if not settings.enabled or not settings.base_url or not settings.api_key or not settings.webhook_credential_id:
@@ -187,8 +187,8 @@ def queue_rotate_credentials():
 		frappe.log_error(f"Failed to update n8n webhook credential: {str(e)}", "n8n Integration Error")
 		raise
 
-def rotate_credentials():
+def enqueue_rotate_credentials():
 	settings = frappe.get_single("n8n Settings")
 	if settings.enabled:
 		from frappe_controller.utils.background_jobs import enqueue
-		enqueue("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.queue_rotate_credentials")
+		enqueue("frappe_n8n.n8n.doctype.n8n_settings.n8n_settings.rotate_credentials")
