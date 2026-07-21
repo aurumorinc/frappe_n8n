@@ -11,7 +11,7 @@ def on_update(doc, method=None):
             # It should likely trigger something similar to update_a_playbook or toggle directly.
             pass
 
-def queue_update_playbooks():
+def enqueue_update_playbooks():
     playbooks = frappe.get_all("Playbook", filters={"provider": "n8n"})
     for p in playbooks:
         enqueue("frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook", playbook_name=p.name)
