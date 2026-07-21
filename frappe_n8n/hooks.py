@@ -18,7 +18,22 @@ scheduler_events = {
 
 controller_events = {
     "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.update_a_playbook": {},
-    "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.retrieve_workflow": {}
+    "frappe_n8n.n8n.doctype.playbook_provider.playbook_provider.retrieve_workflow": {},
+    "frappe_n8n.n8n.doctype.playbook.playbook.create_workflow": {},
+    "frappe_n8n.n8n.doctype.playbook.playbook.toggle_workflow_status": {},
+    "frappe_n8n.n8n.doctype.playbook.playbook.delete_workflow": {},
+    "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution": {},
+    "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.stop_execution": {},
+    "n8n Execution": [
+        {
+            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
+            "rate_limit_per_minute": 50
+        },
+        {
+            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution",
+            "rate_limit_per_minute": 50
+        }
+    ]
 }
 
 # Apps
@@ -170,19 +185,6 @@ override_whitelisted_methods = {
     "frappe_playbook.playbook.doctype.playbook.playbook.trigger_test_execution": "frappe_n8n.n8n.doctype.playbook.playbook.trigger_test_execution",
     "frappe_playbook.playbook.doctype.playbook_execution.playbook_execution.get_debug_url": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.get_debug_url",
     "frappe_playbook.playbook.doctype.playbook_execution.playbook_execution.replay": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.replay"
-}
-
-controller_events = {
-    "n8n Execution": [
-        {
-            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.trigger_execution",
-            "rate_limit_per_minute": 50
-        },
-        {
-            "method": "frappe_n8n.n8n.doctype.playbook_execution.playbook_execution.resume_execution",
-            "rate_limit_per_minute": 50
-        }
-    ]
 }
 
 # Scheduled Tasks
